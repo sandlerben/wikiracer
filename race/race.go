@@ -76,6 +76,13 @@ func (r *Racer) handleGoroutineErr(err error) {
 	log.Errorf("%+v", err)
 	r.err = err
 
+	// sometimes multiple goroutines will try to close the done channel
+	defer func() {
+		if rec := recover(); r != nil {
+			log.Debug("Recovered in f", rec)
+		}
+		r.wg.Done()
+	}()
 	close(r.done) // kill all goroutines
 }
 
@@ -83,15 +90,20 @@ func (r *Racer) checkLinksWorker() {
 	defer r.wg.Done()
 
 	for {
-		linksToCheck := make([]string, checkLinksSize)
-		for i := 0; i < checkLinksSize; i++ {
+		linksToCheck := make([]string, 0)
+		for len(linksToCheck) < checkLinksSize {
 			select {
 			case _ = <-r.done:
 				return
 			case link := <-r.checkLinks:
 				linksToCheck = append(linksToCheck, link)
+			default: // nothing to read on channel
+				if len(linksToCheck) > 5 { // if we have at least 5, let's boogie
+					break
+				}
 			}
 		}
+		log.Debugf("linksToCheck is %v with length %d", linksToCheck, len(linksToCheck))
 
 		u, err := url.Parse("https://en.wikipedia.org/w/api.php")
 		if err != nil {
@@ -145,6 +157,7 @@ func (r *Racer) checkLinksWorker() {
 			return
 		}
 		for _, link := range linksToCheck {
+			log.Debugf("adding %s to getLinks", link)
 			r.getLinks <- link
 		}
 	}
@@ -169,7 +182,10 @@ func (r *Racer) getLinksWorker() {
 			continueResult := ""
 			plcontinueResult := ""
 
+			i := 0
 			for moreResults {
+				log.Debugf("link to get is %s and i is %d", linkToGet, i)
+				i++
 				q := u.Query()
 				q.Set("action", "query")
 				q.Set("format", "json")
@@ -212,6 +228,7 @@ func (r *Racer) getLinksWorker() {
 						r.prevMap.put(childPageTitle, parentPageTitle)
 						if _, ok := r.visitedMap.get(childPageTitle); !ok {
 							r.visitedMap.put(childPageTitle, "")
+							log.Debugf("Adding %s to checkLinks", childPageTitle)
 							r.checkLinks <- childPageTitle
 						}
 					}, "links")
@@ -220,6 +237,7 @@ func (r *Racer) getLinksWorker() {
 						return
 					}
 				}, "query", "pages")
+				log.Debug(string(bodyBytes))
 				if err != nil {
 					r.handleGoroutineErr(errors.WithStack(err))
 					return

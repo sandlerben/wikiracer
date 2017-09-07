@@ -90,7 +90,6 @@ func (r *Racer) checkLinksWorker() {
 				return
 			case link := <-r.checkLinks:
 				linksToCheck = append(linksToCheck, link)
-				r.visitedMap.put(link, "")
 			}
 		}
 
@@ -145,6 +144,9 @@ func (r *Racer) checkLinksWorker() {
 			r.handleGoroutineErr(errors.WithStack(err))
 			return
 		}
+		for _, link := range linksToCheck {
+			r.getLinks <- link
+		}
 	}
 }
 
@@ -161,52 +163,87 @@ func (r *Racer) getLinksWorker() {
 				r.handleGoroutineErr(errors.WithStack(err))
 				return
 			}
-			q := u.Query()
-			q.Set("action", "query")
-			q.Set("format", "json")
-			q.Set("prop", "links")
-			q.Set("titles", linkToGet)
-			q.Set("redirects", "1")
-			q.Set("formatversion", "2")
-			q.Set("pllimit", "500")
-			u.RawQuery = q.Encode()
-
-			resp, err := http.Get(u.String())
-			if err != nil {
-				r.handleGoroutineErr(errors.WithStack(err))
-				return
-			}
-			bodyBytes, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				r.handleGoroutineErr(errors.WithStack(err))
-				return
-			}
 
 			// TODO: handle continues, what is batch complete?
-			// TODO: next use offset
-			_, err = jsonparser.ArrayEach(bodyBytes, func(page []byte, dataType jsonparser.ValueType, offset int, err error) {
-				parentPageTitle, err := jsonparser.GetString(page, "title")
+			moreResults := true
+			continueResult := ""
+			plcontinueResult := ""
+
+			for moreResults {
+				q := u.Query()
+				q.Set("action", "query")
+				q.Set("format", "json")
+				q.Set("prop", "links")
+				q.Set("titles", linkToGet)
+				q.Set("redirects", "1")
+				q.Set("formatversion", "2")
+				q.Set("pllimit", "500")
+
+				if len(continueResult) > 0 {
+					q.Set("continue", continueResult)
+					q.Set("plcontinue", plcontinueResult)
+				}
+
+				u.RawQuery = q.Encode()
+
+				resp, err := http.Get(u.String())
 				if err != nil {
 					r.handleGoroutineErr(errors.WithStack(err))
 					return
 				}
-				log.Print(string(bodyBytes))
-				_, err = jsonparser.ArrayEach(bodyBytes, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
-					childPageTitle, err := jsonparser.GetString(link, "title")
+				bodyBytes, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					r.handleGoroutineErr(errors.WithStack(err))
+					return
+				}
+
+				_, err = jsonparser.ArrayEach(bodyBytes, func(page []byte, dataType jsonparser.ValueType, offset int, err error) {
+					parentPageTitle, err := jsonparser.GetString(page, "title")
 					if err != nil {
 						r.handleGoroutineErr(errors.WithStack(err))
 						return
 					}
-					r.prevMap.put(childPageTitle, parentPageTitle)
-				}, "links")
+					_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
+						childPageTitle, err := jsonparser.GetString(link, "title")
+						if err != nil {
+							r.handleGoroutineErr(errors.WithStack(err))
+							return
+						}
+						r.prevMap.put(childPageTitle, parentPageTitle)
+						if _, ok := r.visitedMap.get(childPageTitle); !ok {
+							r.visitedMap.put(childPageTitle, "")
+							r.checkLinks <- childPageTitle
+						}
+					}, "links")
+					if err != nil {
+						r.handleGoroutineErr(errors.WithStack(err))
+						return
+					}
+				}, "query", "pages")
 				if err != nil {
 					r.handleGoroutineErr(errors.WithStack(err))
 					return
 				}
-			}, "query", "pages")
-			if err != nil {
-				r.handleGoroutineErr(errors.WithStack(err))
-				return
+
+				continueBlock, dataType, _, err := jsonparser.Get(bodyBytes, "continue")
+				if err != nil && dataType != jsonparser.NotExist {
+					r.handleGoroutineErr(errors.WithStack(err))
+					return
+				}
+				if len(continueBlock) == 0 {
+					moreResults = false
+				} else {
+					continueResult, err = jsonparser.GetString(bodyBytes, "continue", "continue")
+					if err != nil {
+						r.handleGoroutineErr(errors.WithStack(err))
+						return
+					}
+					plcontinueResult, err = jsonparser.GetString(bodyBytes, "continue", "plcontinue")
+					if err != nil {
+						r.handleGoroutineErr(errors.WithStack(err))
+						return
+					}
+				}
 			}
 		}
 	}

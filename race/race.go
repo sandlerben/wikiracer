@@ -22,20 +22,20 @@ type Racer struct {
 	startTitle string
 	endTitle   string
 	prevMap    concurrentMap
-	visitedMap concurrentMap
 	wg         sync.WaitGroup
 	checkLinks chan string
 	getLinks   chan string
 	done       chan bool
+	closeOnce  sync.Once
 	err        error
 }
 
 // what do we do on success? how is that passed? and error?
 
 var (
-	checkLinksSize        = 50
-	getLinksSize          = 5
-	numCheckLinksRoutines = 5
+	checkLinksSize        = 10000000
+	getLinksSize          = 10000000
+	numCheckLinksRoutines = 10
 	numGetLinksRoutines   = 5
 )
 
@@ -60,8 +60,6 @@ func NewRacer(startTitle string, endTitle string) *Racer {
 	r.endTitle = endTitle
 	// prev map which maps from page to the page that got you there
 	r.prevMap = concurrentMap{m: make(map[string]string)}
-	// seen set
-	r.visitedMap = concurrentMap{m: make(map[string]string)}
 
 	r.wg = sync.WaitGroup{}
 
@@ -77,13 +75,15 @@ func (r *Racer) handleGoroutineErr(err error) {
 	r.err = err
 
 	// sometimes multiple goroutines will try to close the done channel
-	defer func() {
-		if rec := recover(); r != nil {
-			log.Debug("Recovered in f", rec)
-		}
-		r.wg.Done()
-	}()
-	close(r.done) // kill all goroutines
+	// defer func() {
+	// 	if rec := recover(); r != nil {
+	// 		log.Debug("Recovered in f", rec)
+	// 	}
+	// 	r.wg.Done()
+	// }()
+	r.closeOnce.Do(func() {
+		close(r.done)
+	}) // kill all goroutines
 }
 
 func (r *Racer) checkLinksWorker() {
@@ -91,19 +91,21 @@ func (r *Racer) checkLinksWorker() {
 
 	for {
 		linksToCheck := make([]string, 0)
-		for len(linksToCheck) < checkLinksSize {
+		keepGoing := true
+		for keepGoing && len(linksToCheck) < 50 {
 			select {
 			case _ = <-r.done:
 				return
 			case link := <-r.checkLinks:
+				// log.Debugf("got %s from checkLinks", link)
 				linksToCheck = append(linksToCheck, link)
 			default: // nothing to read on channel
 				if len(linksToCheck) > 5 { // if we have at least 5, let's boogie
-					break
+					keepGoing = false
 				}
 			}
 		}
-		log.Debugf("linksToCheck is %v with length %d", linksToCheck, len(linksToCheck))
+		// log.Debugf("linksToCheck is %v with length %d", linksToCheck, len(linksToCheck))
 
 		u, err := url.Parse("https://en.wikipedia.org/w/api.php")
 		if err != nil {
@@ -146,9 +148,12 @@ func (r *Racer) checkLinksWorker() {
 					r.handleGoroutineErr(errors.WithStack(err))
 					return
 				}
+				log.Debugf("found %s via %s", string(linksData), prevName)
 
 				r.prevMap.put(r.endTitle, prevName)
-				close(r.done)
+				r.closeOnce.Do(func() {
+					close(r.done)
+				}) // kill all goroutines
 				return
 			}
 		}, "query", "pages")
@@ -157,7 +162,7 @@ func (r *Racer) checkLinksWorker() {
 			return
 		}
 		for _, link := range linksToCheck {
-			log.Debugf("adding %s to getLinks", link)
+			// log.Debugf("adding %s to getLinks", link)
 			r.getLinks <- link
 		}
 	}
@@ -171,6 +176,7 @@ func (r *Racer) getLinksWorker() {
 		case _ = <-r.done:
 			return
 		case linkToGet := <-r.getLinks:
+			// log.Debugf("got %s from getLinks", linkToGet)
 			u, err := url.Parse("https://en.wikipedia.org/w/api.php")
 			if err != nil {
 				r.handleGoroutineErr(errors.WithStack(err))
@@ -184,7 +190,7 @@ func (r *Racer) getLinksWorker() {
 
 			i := 0
 			for moreResults {
-				log.Debugf("link to get is %s and i is %d", linkToGet, i)
+				// log.Debugf("link to get is %s and i is %d", linkToGet, i)
 				i++
 				q := u.Query()
 				q.Set("action", "query")
@@ -225,10 +231,9 @@ func (r *Racer) getLinksWorker() {
 							r.handleGoroutineErr(errors.WithStack(err))
 							return
 						}
-						r.prevMap.put(childPageTitle, parentPageTitle)
-						if _, ok := r.visitedMap.get(childPageTitle); !ok {
-							r.visitedMap.put(childPageTitle, "")
-							log.Debugf("Adding %s to checkLinks", childPageTitle)
+						if _, ok := r.prevMap.get(childPageTitle); !ok {
+							r.prevMap.put(childPageTitle, parentPageTitle)
+							// log.Debugf("Adding %s to checkLinks", childPageTitle)
 							r.checkLinks <- childPageTitle
 						}
 					}, "links")
@@ -237,7 +242,6 @@ func (r *Racer) getLinksWorker() {
 						return
 					}
 				}, "query", "pages")
-				log.Debug(string(bodyBytes))
 				if err != nil {
 					r.handleGoroutineErr(errors.WithStack(err))
 					return
@@ -268,7 +272,7 @@ func (r *Racer) getLinksWorker() {
 }
 
 func (r *Racer) Run() ([]string, error) {
-	r.visitedMap.put(r.startTitle, "")
+	r.prevMap.put(r.startTitle, "")
 	r.getLinks <- r.startTitle
 	r.checkLinks <- r.startTitle
 	for i := 0; i < numCheckLinksRoutines; i++ {
@@ -280,6 +284,7 @@ func (r *Racer) Run() ([]string, error) {
 		go r.getLinksWorker()
 	}
 	r.wg.Wait()
+	log.Debug("done waiting")
 
 	if r.err != nil {
 		return nil, errors.WithStack(r.err)
@@ -289,13 +294,16 @@ func (r *Racer) Run() ([]string, error) {
 
 	currentNode := r.endTitle
 	for {
-		if nextNode, ok := r.prevMap.get(currentNode); ok {
-			// append to front
-			finalPath = append([]string{currentNode}, finalPath...)
-			currentNode = nextNode
-		} else {
+		// append to front
+		finalPath = append([]string{currentNode}, finalPath...)
+		nextNode, ok := r.prevMap.get(currentNode)
+
+		if !ok || currentNode == r.startTitle {
 			break
 		}
+
+		currentNode = nextNode
 	}
+	log.Debug("here")
 	return finalPath, nil
 }

@@ -2,9 +2,11 @@
 package web
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	logMiddleware "github.com/bakins/logrus-middleware"
 	"github.com/gorilla/mux"
@@ -48,13 +50,16 @@ func raceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	racer := race.NewRacer(startTitle, endTitle)
+	start := time.Now()
 	path, err := racer.Run()
+	elapsed := time.Since(start)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		io.WriteString(w, "An unexpected error has occurred:\n")
 		io.WriteString(w, err.Error())
 		return
 	}
+	io.WriteString(w, fmt.Sprintf("took %s\n", elapsed))
 	io.WriteString(w, strings.Join(path, ","))
 }
 

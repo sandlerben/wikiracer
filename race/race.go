@@ -3,6 +3,7 @@ package race
 
 import (
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,15 +20,16 @@ type concurrentMap struct {
 }
 
 type Racer struct {
-	startTitle string
-	endTitle   string
-	prevMap    concurrentMap
-	wg         sync.WaitGroup
-	checkLinks chan string
-	getLinks   chan string
-	done       chan bool
-	closeOnce  sync.Once
-	err        error
+	startTitle    string
+	endTitle      string
+	prevMap       concurrentMap
+	linksExplored concurrentMap
+	wg            sync.WaitGroup
+	checkLinks    chan string
+	getLinks      chan string
+	done          chan bool
+	closeOnce     sync.Once
+	err           error
 }
 
 // what do we do on success? how is that passed? and error?
@@ -35,8 +37,8 @@ type Racer struct {
 var (
 	checkLinksSize        = 10000000
 	getLinksSize          = 10000000
-	numCheckLinksRoutines = 10
-	numGetLinksRoutines   = 5
+	numCheckLinksRoutines = 2
+	numGetLinksRoutines   = 2
 )
 
 // put(k,v) maps k to v in the map
@@ -60,6 +62,7 @@ func NewRacer(startTitle string, endTitle string) *Racer {
 	r.endTitle = endTitle
 	// prev map which maps from page to the page that got you there
 	r.prevMap = concurrentMap{m: make(map[string]string)}
+	r.linksExplored = concurrentMap{m: make(map[string]string)}
 
 	r.wg = sync.WaitGroup{}
 
@@ -134,7 +137,6 @@ func (r *Racer) checkLinksWorker() {
 			return
 		}
 
-		// TODO: handle continues, what is batch complete?
 		_, err = jsonparser.ArrayEach(bodyBytes, func(page []byte, dataType jsonparser.ValueType, offset int, err error) {
 			linksData, dataType, _, err := jsonparser.Get(page, "links")
 			if err != nil && dataType != jsonparser.NotExist {
@@ -158,12 +160,16 @@ func (r *Racer) checkLinksWorker() {
 			}
 		}, "query", "pages")
 		if err != nil {
-			r.handleGoroutineErr(errors.WithStack(err))
+			r.handleGoroutineErr(errors.Wrap(err, string(bodyBytes)))
 			return
 		}
+
 		for _, link := range linksToCheck {
 			// log.Debugf("adding %s to getLinks", link)
-			r.getLinks <- link
+			if _, ok := r.linksExplored.get(link); !ok {
+				r.linksExplored.put(link, "")
+				r.getLinks <- link
+			}
 		}
 	}
 }
@@ -184,95 +190,98 @@ func (r *Racer) getLinksWorker() {
 			}
 
 			// TODO: handle continues, what is batch complete?
-			moreResults := true
-			continueResult := ""
-			plcontinueResult := ""
+			// moreResults := true
+			// continueResult := ""
+			// plcontinueResult := ""
 
-			i := 0
-			for moreResults {
-				// log.Debugf("link to get is %s and i is %d", linkToGet, i)
-				i++
-				q := u.Query()
-				q.Set("action", "query")
-				q.Set("format", "json")
-				q.Set("prop", "links")
-				q.Set("titles", linkToGet)
-				q.Set("redirects", "1")
-				q.Set("formatversion", "2")
-				q.Set("pllimit", "500")
-
-				if len(continueResult) > 0 {
-					q.Set("continue", continueResult)
-					q.Set("plcontinue", plcontinueResult)
-				}
-
-				u.RawQuery = q.Encode()
-
-				resp, err := http.Get(u.String())
-				if err != nil {
-					r.handleGoroutineErr(errors.WithStack(err))
-					return
-				}
-				bodyBytes, err := ioutil.ReadAll(resp.Body)
-				if err != nil {
-					r.handleGoroutineErr(errors.WithStack(err))
-					return
-				}
-
-				_, err = jsonparser.ArrayEach(bodyBytes, func(page []byte, dataType jsonparser.ValueType, offset int, err error) {
-					parentPageTitle, err := jsonparser.GetString(page, "title")
-					if err != nil {
-						r.handleGoroutineErr(errors.WithStack(err))
-						return
-					}
-					_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
-						childPageTitle, err := jsonparser.GetString(link, "title")
-						if err != nil {
-							r.handleGoroutineErr(errors.WithStack(err))
-							return
-						}
-						if _, ok := r.prevMap.get(childPageTitle); !ok {
-							r.prevMap.put(childPageTitle, parentPageTitle)
-							// log.Debugf("Adding %s to checkLinks", childPageTitle)
-							r.checkLinks <- childPageTitle
-						}
-					}, "links")
-					if err != nil {
-						r.handleGoroutineErr(errors.WithStack(err))
-						return
-					}
-				}, "query", "pages")
-				if err != nil {
-					r.handleGoroutineErr(errors.WithStack(err))
-					return
-				}
-
-				continueBlock, dataType, _, err := jsonparser.Get(bodyBytes, "continue")
-				if err != nil && dataType != jsonparser.NotExist {
-					r.handleGoroutineErr(errors.WithStack(err))
-					return
-				}
-				if len(continueBlock) == 0 {
-					moreResults = false
-				} else {
-					continueResult, err = jsonparser.GetString(bodyBytes, "continue", "continue")
-					if err != nil {
-						r.handleGoroutineErr(errors.WithStack(err))
-						return
-					}
-					plcontinueResult, err = jsonparser.GetString(bodyBytes, "continue", "plcontinue")
-					if err != nil {
-						r.handleGoroutineErr(errors.WithStack(err))
-						return
-					}
-				}
+			q := u.Query()
+			q.Set("action", "query")
+			q.Set("format", "json")
+			q.Set("prop", "links")
+			q.Set("titles", linkToGet)
+			q.Set("redirects", "1")
+			q.Set("formatversion", "2")
+			q.Set("pllimit", "500")
+			if rand.Intn(2) == 1 {
+				q.Set("pldir", "descending")
 			}
+
+			// if len(continueResult) > 0 {
+			// 	q.Set("continue", continueResult)
+			// 	q.Set("plcontinue", plcontinueResult)
+			// }
+
+			u.RawQuery = q.Encode()
+
+			resp, err := http.Get(u.String())
+			if err != nil {
+				r.handleGoroutineErr(errors.WithStack(err))
+				return
+			}
+			bodyBytes, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				r.handleGoroutineErr(errors.WithStack(err))
+				return
+			}
+
+			_, err = jsonparser.ArrayEach(bodyBytes, func(page []byte, dataType jsonparser.ValueType, offset int, err error) {
+				parentPageTitle, err := jsonparser.GetString(page, "title")
+				if err != nil {
+					r.handleGoroutineErr(errors.WithStack(err))
+					return
+				}
+				_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
+					childPageTitle, err := jsonparser.GetString(link, "title")
+					if err != nil {
+						r.handleGoroutineErr(errors.WithStack(err))
+						return
+					}
+					if _, ok := r.prevMap.get(childPageTitle); !ok {
+						r.prevMap.put(childPageTitle, parentPageTitle)
+						// log.Debugf("Adding %s to checkLinks", childPageTitle)
+						r.checkLinks <- childPageTitle
+					}
+				}, "links")
+				if err != nil {
+					_, dataType, _, _ := jsonparser.Get(page, "links")
+					if dataType != jsonparser.NotExist {
+						r.handleGoroutineErr(errors.WithStack(err))
+						return
+					}
+				}
+			}, "query", "pages")
+			if err != nil {
+				r.handleGoroutineErr(errors.WithStack(err))
+				return
+			}
+
+			// continueBlock, dataType, _, err := jsonparser.Get(bodyBytes, "continue")
+			// if err != nil && dataType != jsonparser.NotExist {
+			// 	r.handleGoroutineErr(errors.WithStack(err))
+			// 	return
+			// }
+			// if len(continueBlock) == 0 {
+			// 	moreResults = false
+			// } else {
+			// 	continueResult, err = jsonparser.GetString(bodyBytes, "continue", "continue")
+			// 	if err != nil {
+			// 		r.handleGoroutineErr(errors.WithStack(err))
+			// 		return
+			// 	}
+			// 	plcontinueResult, err = jsonparser.GetString(bodyBytes, "continue", "plcontinue")
+			// 	if err != nil {
+			// 		r.handleGoroutineErr(errors.WithStack(err))
+			// 		return
+			// 	}
+			// }
+			// }
 		}
 	}
 }
 
 func (r *Racer) Run() ([]string, error) {
 	r.prevMap.put(r.startTitle, "")
+	r.linksExplored.put(r.startTitle, "")
 	r.getLinks <- r.startTitle
 	r.checkLinks <- r.startTitle
 	for i := 0; i < numCheckLinksRoutines; i++ {
@@ -285,6 +294,7 @@ func (r *Racer) Run() ([]string, error) {
 	}
 	r.wg.Wait()
 	log.Debug("done waiting")
+	log.Debugf("length of getLinks is %d and length of checkLinks is %d", len(r.getLinks), len(r.checkLinks))
 
 	if r.err != nil {
 		return nil, errors.WithStack(r.err)

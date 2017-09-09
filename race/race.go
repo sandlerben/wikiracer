@@ -131,9 +131,10 @@ func (r *Racer) getLinksIteratePages(page []byte, dataType jsonparser.ValueType,
 			r.handleErrInWorker(errors.WithStack(err))
 			return
 		}
-		if _, ok := r.prevMap.get(childPageTitle); !ok {
+		_, childOk := r.prevMap.get(childPageTitle)
+		_, parentOk := r.prevMap.get(parentPageTitle)
+		if !childOk && !parentOk && childPageTitle != parentPageTitle {
 			r.prevMap.put(childPageTitle, parentPageTitle)
-			// log.Debugf("Adding %s to checkLinks", childPageTitle)
 			r.checkLinks <- childPageTitle
 		}
 	}, "links")
@@ -163,7 +164,7 @@ func (r *Racer) checkLinksWorker() {
 				// log.Debugf("got %s from checkLinks", link)
 				linksToCheck = append(linksToCheck, link)
 			default: // nothing to read on channel
-				if len(linksToCheck) > 5 { // if we have at least 5, let's boogie
+				if len(linksToCheck) > 0 { // if we have at least 1, let's boogie
 					break linksToCheckLoop
 				}
 			}

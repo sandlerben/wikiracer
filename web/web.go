@@ -13,6 +13,12 @@ import (
 	"github.com/sandlerben/wikiracer/race"
 )
 
+var requestCache map[requestInfo][]string
+
+func init() {
+	requestCache = make(map[requestInfo][]string)
+}
+
 type route struct {
 	Name        string
 	Method      string
@@ -40,10 +46,16 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "OK :)")
 }
 
+type requestInfo struct {
+	startTitle string
+	endTitle   string
+}
+
 // healthHandler returns a 200 response to the client if the server is healthy.
 func raceHandler(w http.ResponseWriter, r *http.Request) {
 	startTitle := r.URL.Query().Get("starttitle")
 	endTitle := r.URL.Query().Get("endtitle")
+	forceNoCache := r.URL.Query().Get("nocache")
 	if startTitle == "" || endTitle == "" {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		io.WriteString(w, "Must pass start and end arguments.")
@@ -51,16 +63,23 @@ func raceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	racer := race.NewRacer(startTitle, endTitle)
 	start := time.Now()
-	path, err := racer.Run()
-	elapsed := time.Since(start)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		io.WriteString(w, "An unexpected error has occurred:\n")
-		io.WriteString(w, err.Error())
-		return
+	currentRequestInfo := requestInfo{startTitle: startTitle, endTitle: endTitle}
+
+	path, ok := requestCache[currentRequestInfo]
+	if !ok || forceNoCache == "1" {
+		var err error
+		path, err = racer.Run()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			io.WriteString(w, "An unexpected error has occurred:\n")
+			io.WriteString(w, err.Error())
+			return
+		}
+		requestCache[currentRequestInfo] = path
 	}
+	elapsed := time.Since(start)
 	io.WriteString(w, fmt.Sprintf("took %s\n", elapsed))
-	io.WriteString(w, strings.Join(path, ","))
+	io.WriteString(w, strings.Join(path, " --> "))
 }
 
 // NewRouter creates and returns a mux.Router with default routes.

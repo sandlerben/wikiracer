@@ -24,14 +24,14 @@ The endpoint returns a path from the start page to the end page and how long it 
 
 The following environment variables can be set to customize the behavior of wikiracer.
 
-- `WIKIRACER_PORT`: The port on which to run a HTTP server (default :8000).
+- `WIKIRACER_PORT`: The port on which to run a HTTP server (default `8000`).
 - `NUM_CHECK_LINKS_ROUTINES`: The number of concurrent checkLinks workers to run (default 2).
 - `NUM_GET_LINKS_ROUTINES`: The number of concurrent getLinks workers to run (default 2).
-- `EXPLORE_ALL_LINKS`: Sometimes, the MediaWiki API doesn't return all links in once response. As a result, wikiracer continues to query the MediaWiki API until all the links are returned. If `EXPLORE_ALL_LINKS` is set to `"false"`, then wikiracer will not continue to query.
+- `EXPLORE_ALL_LINKS`: Sometimes, the MediaWiki API doesn't return all links in once response. As a result, wikiracer continues to query the MediaWiki API until all the links are returned. If `EXPLORE_ALL_LINKS` is set to `"false"`, then wikiracer will not continue even if there are more links.
 
 ## Installation
 
-Clone the source code.
+Create a directory and clone the repo:
 
 ```
 $ mkdir $GOPATH/src/github.com/sandlerben/wikiracer
@@ -39,7 +39,7 @@ $ cd $GOPATH/src/github.com/sandlerben/wikiracer
 $ git clone https://github.com/sandlerben/wikiracer.git .
 ```
 
-Install the dependencies using [dep](https://github.com/golang/dep), the forthcoming official Go dependency management tool.
+Install the dependencies using [dep](https://github.com/golang/dep), the semi-official Go dependency management tool.
 
 ```
 $ dep ensure
@@ -51,17 +51,17 @@ Finally, install wikiracer.
 go install
 ```
 
-## Architecture overview
-
-![wikiracer overview](./wikiracer_overview.svg)<img src="./wikiracer_overview.svg">
-
-### Why Go?
+## Why Go?
 
 I wrote this application in Go for a few reasons:
 
-- I had experience using Go in the past with [go-torch](https://github.com/uber/go-torch) and [transcribe4all](https://github.com/hack4impact/transcribe4all).
+- I have experience using Go in the past from [go-torch](https://github.com/uber/go-torch) and [transcribe4all](https://github.com/hack4impact/transcribe4all).
 - Go has extremely powerful concurrency primitives ([goroutines](https://gobyexample.com/goroutines) and [channels](https://tour.golang.org/concurrency/2)) and an excellent runtime/scheduler which make writing fast, thread-safe concurrent programs a breeze.
 - Go has a great standard library. In particular, it's easy to create a full-featured HTTP server and make HTTP requests with Go's built-ins.
+
+## Architecture overview
+
+[![wikiracer overview](./wikiracer_overview.svg)](./wikiracer_overview.svg)
 
 ### Web
 

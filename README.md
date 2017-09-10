@@ -72,7 +72,7 @@ The `wikiracer/web` package encapsulates the logic for handling HTTP requests. T
 
 The `wikiracer/web` package uses the `gorilla/mux` router, an extremely popular Go URL dispatcher.
 
-The `wikiracer/web` package also features a simple cache of paths previously found (implemented as a Go map). That way, if a request with the same start and end pages is made multiple times, the wikipedia graph only needs to be traversed once.
+The `wikiracer/web` package also features a simple cache of paths previously found (implemented as a Go map). That way, a path from same start to some end page only needs to be found once.
 
 ### Race
 
@@ -87,20 +87,20 @@ A `race.Racer` struct encapsulates all the state needed for one race, including:
 - Several synchronization primitives (including `sync.WaitGroup` and `sync.Once`)
 - Channels to allow concurrent workers to communicate  
 
-A `race.Racer` exposes one public function, `Run`, which returns a path from start to end to the caller.
+A `race.Racer` exposes one public function, `Run`, which returns a path from a start page to an end page.
 
-Under the hood, there is a lot going on inside the `race` package. Specifically, a number of `checkLinks` workers and `getLinks` workers concurrently do work while communicating with each other (via channels) until a path to the end page is found.
+Under the hood, there is a lot going on inside the `race` package. Specifically, a number of `checkLinks` workers and `getLinks` workers concurrently explore the graph of wikipedia pages while communicating with each other (via channels) until a path to the end page is found.
 
-At a high level, links flow through a simple pipeline as follows:
+At a high level, pages go through the following pipeline:
 
 1. A page is added to the `checkLinks` channel. A `checkLinks` worker checks if the page connects to the end page. If it does, a path has been found! If not, add the page to the `getLinks` channel.
 2. A `getLinks` worker takes the page and adds all the pages linked to from the page (children pages in a sense) to the `checkLinks` channel.
 
-These stages are describes in more detail below:
+These stages are describes in more detail below.
 
 #### checkLinks
 
-The `checkLinks` channel contains pages which _may_ link to the end page. `checkLinks` workers take up to 50 pages from the `checkLinks` channel and checks if any of them link to the end. The workers call the MediaWiki API with several parameters including `prop=links` and `pltitles=<end title>` parameters. The `pltitles` parameter is **extremely** powerful: it checks whether any of up to 50 pages links to a certain page (but still returns a response in a few hundred milliseconds!)
+The `checkLinks` channel contains pages which _may_ link to the end page. `checkLinks` workers take up to 50 pages from the `checkLinks` channel and checks if any of them link to the end page. The workers call the MediaWiki API with several parameters including `prop=links` and `pltitles=<end title>` parameters. The `pltitles` parameter is **extremely** powerful: it checks whether any of up to 50 pages links to a certain page (but still returns a response in a few hundred milliseconds!)
 
 If none of the pages link to the end, the pages are added to the `getLinks` channel.
 

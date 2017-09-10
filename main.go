@@ -23,8 +23,13 @@ func main() {
 	// serve http
 	http.Handle("/", middlewareRouter)
 
-	log.Infof("Server is running at http://localhost:%d", 8000)
-	addr := fmt.Sprintf(":%d", 8000)
+	var port string
+	var ok bool
+	if port, ok = os.LookupEnv("WIKIRACER_PORT"); !ok {
+		port = "8000"
+	}
+	log.Infof("Server is running at http://localhost:%s", port)
+	addr := fmt.Sprintf(":%s", port)
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Error(err)
 	}

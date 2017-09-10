@@ -132,8 +132,7 @@ func (r *Racer) getLinksIteratePages(page []byte, dataType jsonparser.ValueType,
 			return
 		}
 		_, childOk := r.prevMap.get(childPageTitle)
-		_, parentOk := r.prevMap.get(parentPageTitle)
-		if !childOk && !parentOk && childPageTitle != parentPageTitle {
+		if !childOk && childPageTitle != parentPageTitle {
 			r.prevMap.put(childPageTitle, parentPageTitle)
 			r.checkLinks <- childPageTitle
 		}
@@ -246,7 +245,7 @@ func (r *Racer) getLinksWorker() {
 				q.Set("pldir", "descending")
 			}
 
-			for moreResults && config.exploreAllLinks {
+			for moreResults {
 
 				if len(continueResult) > 0 {
 					q.Set("continue", continueResult)
@@ -277,7 +276,7 @@ func (r *Racer) getLinksWorker() {
 					r.handleErrInWorker(errors.WithStack(err))
 					return
 				}
-				if len(continueBlock) == 0 {
+				if len(continueBlock) == 0 || !config.exploreAllLinks {
 					moreResults = false
 				} else {
 					continueResult, err = jsonparser.GetString(bodyBytes, "continue", "continue")

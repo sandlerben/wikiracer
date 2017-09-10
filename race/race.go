@@ -32,7 +32,7 @@ var config configuration
 
 func init() {
 	config = configuration{
-		numCheckLinksRoutines: 5,
+		numCheckLinksRoutines: 10,
 		numGetLinksRoutines:   5,
 		exploreAllLinks:       true,
 	}
@@ -328,6 +328,6 @@ func (r *defaultRacer) Run() ([]string, error) {
 
 		currentNode = nextNode
 	}
-	// log.Debugf("at end of Run(), checkLinks length is %d, getLinks length is %d", len(r.checkLinks), len(r.getLinks))
+	log.Debugf("at end of Run(), checkLinks length is %d, getLinks length is %d", len(r.checkLinks), len(r.getLinks))
 	return finalPath, nil
 }

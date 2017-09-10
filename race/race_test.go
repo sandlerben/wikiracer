@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	checkLinksResponse = `{"batchcomplete":true,"query":{"pages":[{"pageid":8569916,"ns":0,"title":"English language","links":[{"ns":0,"title":"Spanish language"}]}]}}`
+	checkLinksResponse = `{"batchcomplete":true,"query":{"pages":[{"pageid":8569916,"ns":0,"title":"English language","links":[{"ns":0,"title":"end"}]}]}}`
 	getLinksResponse   = `{"query":{"pages":[{"pageid":8569916,"ns":0,"title":"start","links":[{"ns":14,"title":"English language"},{"ns":14,"title":"Spanish language"},{"ns":14,"title":"French language"},{"ns":14,"title":"German language"}]}}`
 )
 
@@ -38,14 +38,13 @@ func TestCheckLinksWorker(t *testing.T) {
 		httpmock.NewStringResponder(200, checkLinksResponse))
 
 	r := newDefaultRacer("start", "end")
-	r.wg.Add(1)
 
 	for _, page := range samplePages {
 		r.checkLinks <- page
 	}
 
 	go r.checkLinksWorker()
-	r.wg.Wait() // we will only go past this line if checkLinksWorker calls Done
+	_ = <-r.done // we will only go past this line if checkLinksWorker closes done
 
 	for _, page := range samplePages {
 		if _, ok := r.linksExplored.get(page); !ok {
@@ -64,14 +63,13 @@ func TestCheckLinksWorkerHandleErr(t *testing.T) {
 		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
 
 	r := newDefaultRacer("start", "end")
-	r.wg.Add(1)
 
 	for _, page := range samplePages {
 		r.checkLinks <- page
 	}
 
 	go r.checkLinksWorker()
-	r.wg.Wait() // we will only go past this line if checkLinksWorker calls Done
+	_ = <-r.done // we will only go past this line if checkLinksWorker closes done
 
 	for _, page := range samplePages {
 		if _, ok := r.linksExplored.get(page); ok {
@@ -113,12 +111,10 @@ func TestGetLinksWorker(t *testing.T) {
 		httpmock.NewStringResponder(200, getLinksResponse))
 
 	r := newDefaultRacer("start", "end")
-	r.wg.Add(1)
 
 	r.getLinks <- linkToGet
 
-	go r.getLinksWorker()
-	r.wg.Wait() // we will only go past this line if checkLinksWorker calls Done
+	r.getLinksWorker()
 
 	samplePages := []string{"English language", "French language", "Spanish language", "German language"}
 	for _, page := range samplePages {
@@ -141,12 +137,11 @@ func TestGetLinksWorkerHandleErr(t *testing.T) {
 		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
 
 	r := newDefaultRacer("start", "end")
-	r.wg.Add(1)
 
 	r.getLinks <- linkToGet
 
 	go r.getLinksWorker()
-	r.wg.Wait() // we will only go past this line if checkLinksWorker calls Done
+	_ = <-r.done // we will only go past this line if getLinksWorker closes done
 
 	samplePages := []string{"English language", "French language", "Spanish language", "German language"}
 	for _, page := range samplePages {
@@ -154,5 +149,4 @@ func TestGetLinksWorkerHandleErr(t *testing.T) {
 			t.Errorf("link %s should not be in prevMap but it is", page)
 		}
 	}
-	_ = <-r.done // done must be closed. if done wasn't closed, this will hang.
 }

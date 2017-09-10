@@ -2,32 +2,32 @@
 
 ## Synopsis
 
-Go application to race from one Wikipedia page to another as fast as possible.
+Go application which finds a path from one Wikipedia page to another by following links.
 
 ## Basic Usage
 
-Start a wikiracer server on port 8000 (port can be customized with `WIKIRACER_PORT`)
+Start a wikiracer server on port `8000` (the port can be customized with `WIKIRACER_PORT`)
 
 ```
 $ wikiracer
 ```
 
-In order to initiate a race from a start page to an end page, make a `GET` request to the server's `/race` endpoint with the following arguments.
+In order to initiate a race, make a `GET` request to the server's `/race` endpoint with the following arguments.
 
-- starttitle **(required)**: The title of the wikipedia page to start from.
-- endtitle **(required)**: The title of the wikipedia page to find a path to.
-- nocache: By default, the server caches paths found from start to end. To force disable caching, set `nocache=1`.
+- starttitle **(required)**: The wikipedia page to start from.
+- endtitle **(required)**: The wikipedia page to find a path to.
+- nocache: By default, the server caches all paths found from start to end. To ignore the cache for this race, set `nocache=1`.
 
-The endpoint returns a path from the start page to the end page as well as how long it took to find the path.
+The endpoint returns a path from the start page to the end page and how long it took to find the path.
 
 ### Customizing behavior
 
 The following environment variables can be set to customize the behavior of wikiracer.
 
-`WIKIRACER_PORT`: The port on which to run a HTTP server (default :8000).
-`NUM_CHECK_LINKS_ROUTINES`: The number of concurrent checkLinks workers to run (default 2).
-`NUM_GET_LINKS_ROUTINES`: The number of concurrent getLinks workers to run (default 2).
-`EXPLORE_ALL_LINKS`: Sometimes, the MediaWiki API doesn't return all links in once response. As a result, wikiracer continues to query the MediaWiki API until all the links are returned. If `EXPLORE_ALL_LINKS` is set to `"false"`, then wikiracer will not continue to query.
+- `WIKIRACER_PORT`: The port on which to run a HTTP server (default :8000).
+- `NUM_CHECK_LINKS_ROUTINES`: The number of concurrent checkLinks workers to run (default 2).
+- `NUM_GET_LINKS_ROUTINES`: The number of concurrent getLinks workers to run (default 2).
+- `EXPLORE_ALL_LINKS`: Sometimes, the MediaWiki API doesn't return all links in once response. As a result, wikiracer continues to query the MediaWiki API until all the links are returned. If `EXPLORE_ALL_LINKS` is set to `"false"`, then wikiracer will not continue to query.
 
 ## Installation
 

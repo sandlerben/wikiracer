@@ -16,20 +16,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// A Racer performs a wikipedia race.
-type Racer struct {
-	startTitle    string
-	endTitle      string
-	prevMap       concurrentMap // mapping from childPage -> parentPage
-	linksExplored concurrentMap // set of links which have passed through getLinks
-	wg            sync.WaitGroup
-	checkLinks    chan string // links which may connect to endTitle
-	getLinks      chan string // parent links which should have children explored
-	done          chan bool   // once closed, all goroutines exit
-	closeOnce     sync.Once   // ensures that once is only closed once
-	err           error       // err that should be passed back to requester
-}
-
 var (
 	checkLinksSize = 10000000
 	getLinksSize   = 10000000
@@ -64,6 +50,20 @@ func init() {
 	if err != nil {
 		log.Panic(err)
 	}
+}
+
+// A Racer performs a wikipedia race.
+type Racer struct {
+	startTitle    string
+	endTitle      string
+	prevMap       concurrentMap // mapping from childPage -> parentPage
+	linksExplored concurrentMap // set of links which have passed through getLinks
+	wg            sync.WaitGroup
+	checkLinks    chan string // links which may connect to endTitle
+	getLinks      chan string // parent links which should have children explored
+	done          chan bool   // once closed, all goroutines exit
+	closeOnce     sync.Once   // ensures that once is only closed once
+	err           error       // err that should be passed back to requester
 }
 
 // NewRacer returns a Racer which can run a race from start to end.
@@ -181,7 +181,7 @@ func (r *Racer) checkLinksWorker() {
 		q.Set("redirects", "1")
 		q.Set("formatversion", "2")
 		q.Set("pllimit", "500")
-		q.Set("pltitles", r.endTitle) // TODO: should we make sure this is real?
+		q.Set("pltitles", r.endTitle)
 		u.RawQuery = q.Encode()
 
 		resp, err := http.Get(u.String())

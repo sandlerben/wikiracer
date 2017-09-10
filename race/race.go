@@ -53,7 +53,11 @@ func init() {
 }
 
 // A Racer performs a wikipedia race.
-type Racer struct {
+type Racer interface {
+	Run() ([]string, error)
+}
+
+type defaultRacer struct {
 	startTitle    string
 	endTitle      string
 	prevMap       concurrentMap // mapping from childPage -> parentPage
@@ -67,8 +71,8 @@ type Racer struct {
 }
 
 // NewRacer returns a Racer which can run a race from start to end.
-func NewRacer(startTitle string, endTitle string) *Racer {
-	r := new(Racer)
+func NewRacer(startTitle string, endTitle string) Racer {
+	r := new(defaultRacer)
 	r.startTitle = startTitle
 	r.endTitle = endTitle
 	r.prevMap = concurrentMap{m: make(map[string]string)}
@@ -82,7 +86,7 @@ func NewRacer(startTitle string, endTitle string) *Racer {
 
 // handleErrInWorker contains common error handling logic for when an error
 // occurs in a worker goroutine
-func (r *Racer) handleErrInWorker(err error) {
+func (r *defaultRacer) handleErrInWorker(err error) {
 	log.Error("err occurred in worker")
 	log.Errorf("%+v", err)
 	r.err = err
@@ -94,7 +98,7 @@ func (r *Racer) handleErrInWorker(err error) {
 
 // checkLinksIteratePages is a function which iterates through a `page` json
 // blob for checkLinks. It is compliant with the jsonparser.ArrayEach API.
-func (r *Racer) checkLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
+func (r *defaultRacer) checkLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
 	linksData, dataType, _, err := jsonparser.Get(page, "links")
 	if err != nil && dataType != jsonparser.NotExist {
 		r.handleErrInWorker(errors.WithStack(err))
@@ -119,7 +123,7 @@ func (r *Racer) checkLinksIteratePages(page []byte, dataType jsonparser.ValueTyp
 
 // getLinksIteratePages is a function which iterates through a `page` json
 // blob for getLinks. It is compliant with the jsonparser.ArrayEach API.
-func (r *Racer) getLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
+func (r *defaultRacer) getLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
 	parentPageTitle, err := jsonparser.GetString(page, "title")
 	if err != nil {
 		r.handleErrInWorker(errors.WithStack(err))
@@ -148,7 +152,7 @@ func (r *Racer) getLinksIteratePages(page []byte, dataType jsonparser.ValueType,
 
 // checkLinksWorker gets links from linksToCheck and checks if any of them are
 // adjacent to end. If one is, the worker alerts all other workers.
-func (r *Racer) checkLinksWorker() {
+func (r *defaultRacer) checkLinksWorker() {
 	defer r.wg.Done()
 
 	for {
@@ -160,7 +164,6 @@ func (r *Racer) checkLinksWorker() {
 			case _ = <-r.done:
 				return
 			case link := <-r.checkLinks:
-				// log.Debugf("got %s from checkLinks", link)
 				linksToCheck = append(linksToCheck, link)
 			default: // nothing to read on channel
 				if len(linksToCheck) > 0 { // if we have at least 1, let's boogie
@@ -213,7 +216,7 @@ func (r *Racer) checkLinksWorker() {
 
 // getLinksWorker gets pages from getLinks and adds the pages linked from these
 // pages to checkLinks.
-func (r *Racer) getLinksWorker() {
+func (r *defaultRacer) getLinksWorker() {
 	defer r.wg.Done()
 
 	for {
@@ -296,7 +299,7 @@ func (r *Racer) getLinksWorker() {
 }
 
 // Run finds a path from start to end and returns it.
-func (r *Racer) Run() ([]string, error) {
+func (r *defaultRacer) Run() ([]string, error) {
 	r.prevMap.put(r.startTitle, "")
 	r.linksExplored.put(r.startTitle, "")
 	r.getLinks <- r.startTitle

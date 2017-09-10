@@ -31,7 +31,7 @@ var routes = []route{
 		"race",
 		"GET",
 		"/race",
-		raceHandler,
+		raceHandler(race.NewRacer),
 	},
 	route{
 		"health",
@@ -51,35 +51,39 @@ type requestInfo struct {
 	endTitle   string
 }
 
-// healthHandler returns a 200 response to the client if the server is healthy.
-func raceHandler(w http.ResponseWriter, r *http.Request) {
-	startTitle := r.URL.Query().Get("starttitle")
-	endTitle := r.URL.Query().Get("endtitle")
-	forceNoCache := r.URL.Query().Get("nocache")
-	if startTitle == "" || endTitle == "" {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		io.WriteString(w, "Must pass start and end arguments.")
-		return
-	}
-	racer := race.NewRacer(startTitle, endTitle)
-	start := time.Now()
-	currentRequestInfo := requestInfo{startTitle: startTitle, endTitle: endTitle}
-
-	path, ok := requestCache[currentRequestInfo]
-	if !ok || forceNoCache == "1" {
-		var err error
-		path, err = racer.Run()
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			io.WriteString(w, "An unexpected error has occurred:\n")
-			io.WriteString(w, err.Error())
+// raceHandler returns a handler for the race endpoint which uses the supplied
+// race.Racer. The raceHandler is parameterized in this way to enable mock
+// testing.
+func raceHandler(newRacer func(a, b string) race.Racer) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		startTitle := r.URL.Query().Get("starttitle")
+		endTitle := r.URL.Query().Get("endtitle")
+		forceNoCache := r.URL.Query().Get("nocache")
+		if startTitle == "" || endTitle == "" {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			io.WriteString(w, "Must pass start and end arguments.")
 			return
 		}
-		requestCache[currentRequestInfo] = path
+		racer := newRacer(startTitle, endTitle)
+		start := time.Now()
+		currentRequestInfo := requestInfo{startTitle: startTitle, endTitle: endTitle}
+
+		path, ok := requestCache[currentRequestInfo]
+		if !ok || forceNoCache == "1" {
+			var err error
+			path, err = racer.Run()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				io.WriteString(w, "An unexpected error has occurred:\n")
+				io.WriteString(w, err.Error())
+				return
+			}
+			requestCache[currentRequestInfo] = path
+		}
+		elapsed := time.Since(start)
+		io.WriteString(w, fmt.Sprintf("took %s\n", elapsed))
+		io.WriteString(w, strings.Join(path, " --> "))
 	}
-	elapsed := time.Since(start)
-	io.WriteString(w, fmt.Sprintf("took %s\n", elapsed))
-	io.WriteString(w, strings.Join(path, " --> "))
 }
 
 // NewRouter creates and returns a mux.Router with default routes.

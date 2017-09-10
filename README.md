@@ -51,6 +51,21 @@ Finally, install wikiracer.
 go install
 ```
 
+## Run tests
+
+The full test suite can be run with:
+
+```
+go test ./...
+```
+
+## Profile
+
+wikiracer exposes a [pprof endpoint](https://blog.golang.org/profiling-go-programs) which allows it to be profiled in a few ways:
+
+- Using [go-torch](https://github.com/uber/go-torch), which can generate a [flamegraph](https://github.com/uber/go-torch#example-flame-graph) visualizing the program's workload.
+- Using `go tool pprof`, which can create CPU profiles, memory profiles, and blocking profiles and visualize each in various different ways.
+
 ## Why Go?
 
 I wrote this application in Go for a few reasons:

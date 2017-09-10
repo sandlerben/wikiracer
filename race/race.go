@@ -32,8 +32,8 @@ var config configuration
 
 func init() {
 	config = configuration{
-		numCheckLinksRoutines: 2,
-		numGetLinksRoutines:   2,
+		numCheckLinksRoutines: 5,
+		numGetLinksRoutines:   5,
 		exploreAllLinks:       true,
 	}
 
@@ -62,12 +62,11 @@ type defaultRacer struct {
 	endTitle      string
 	prevMap       concurrentMap // mapping from childPage -> parentPage
 	linksExplored concurrentMap // set of links which have passed through getLinks
-	wg            sync.WaitGroup
-	checkLinks    chan string // links which may connect to endTitle
-	getLinks      chan string // parent links which should have children explored
-	done          chan bool   // once closed, all goroutines exit
-	closeOnce     sync.Once   // ensures that once is only closed once
-	err           error       // err that should be passed back to requester
+	checkLinks    chan string   // links which may connect to endTitle
+	getLinks      chan string   // parent links which should have children explored
+	done          chan bool     // once closed, all goroutines exit
+	closeOnce     sync.Once     // ensures that once is only closed once
+	err           error         // err that should be passed back to requester
 }
 
 func newDefaultRacer(startTitle string, endTitle string) *defaultRacer {
@@ -76,7 +75,6 @@ func newDefaultRacer(startTitle string, endTitle string) *defaultRacer {
 	r.endTitle = endTitle
 	r.prevMap = concurrentMap{m: make(map[string]string)}
 	r.linksExplored = concurrentMap{m: make(map[string]string)}
-	r.wg = sync.WaitGroup{}
 	r.checkLinks = make(chan string, checkLinksSize)
 	r.getLinks = make(chan string, getLinksSize)
 	r.done = make(chan bool, 1)
@@ -157,8 +155,6 @@ func (r *defaultRacer) getLinksIteratePages(page []byte, dataType jsonparser.Val
 // checkLinksWorker gets links from linksToCheck and checks if any of them are
 // adjacent to end. If one is, the worker alerts all other workers.
 func (r *defaultRacer) checkLinksWorker() {
-	defer r.wg.Done()
-
 	for {
 		linksToCheck := make([]string, 0)
 
@@ -221,8 +217,6 @@ func (r *defaultRacer) checkLinksWorker() {
 // getLinksWorker gets pages from getLinks and adds the pages linked from these
 // pages to checkLinks.
 func (r *defaultRacer) getLinksWorker() {
-	defer r.wg.Done()
-
 	for {
 		select {
 		case _ = <-r.done:
@@ -309,14 +303,12 @@ func (r *defaultRacer) Run() ([]string, error) {
 	r.getLinks <- r.startTitle
 	r.checkLinks <- r.startTitle
 	for i := 0; i < config.numCheckLinksRoutines; i++ {
-		r.wg.Add(1)
 		go r.checkLinksWorker()
 	}
 	for i := 0; i < config.numGetLinksRoutines; i++ {
-		r.wg.Add(1)
 		go r.getLinksWorker()
 	}
-	r.wg.Wait()
+	_ = <-r.done
 
 	if r.err != nil {
 		return nil, errors.WithStack(r.err)
@@ -336,5 +328,6 @@ func (r *defaultRacer) Run() ([]string, error) {
 
 		currentNode = nextNode
 	}
+	// log.Debugf("at end of Run(), checkLinks length is %d, getLinks length is %d", len(r.checkLinks), len(r.getLinks))
 	return finalPath, nil
 }

@@ -20,6 +20,12 @@
   revision = "fda8192cc4f100afbdbbcce82284a5b711969174"
 
 [[projects]]
+  name = "github.com/davecgh/go-spew"
+  packages = ["spew"]
+  revision = "346938d642f2ec3594ed81d874461961cd0faa76"
+  version = "v1.1.0"
+
+[[projects]]
   name = "github.com/gorilla/context"
   packages = ["."]
   revision = "1ea25387ff6f684839d82767c1733ff4d4d15d0a"
@@ -38,6 +44,24 @@
   version = "v0.8.0"
 
 [[projects]]
+  name = "github.com/pmezard/go-difflib"
+  packages = ["difflib"]
+  revision = "792786c7400a136282c1664665ae0a8db921c6c2"
+  version = "v1.0.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/stretchr/objx"
+  packages = ["."]
+  revision = "1a9d0bb9f541897e62256577b352fdbc1fb4fd94"
+
+[[projects]]
+  name = "github.com/stretchr/testify"
+  packages = ["assert","mock"]
+  revision = "69483b4bd14f5845b5a1e55bca19e954e827f1d0"
+  version = "v1.1.4"
+
+[[projects]]
   branch = "master"
   name = "golang.org/x/crypto"
   packages = ["ssh/terminal"]
@@ -49,9 +73,15 @@
   packages = ["unix","windows"]
   revision = "a5054c7c1385fd50d9394475365355a87a7873ec"
 
+[[projects]]
+  branch = "v1"
+  name = "gopkg.in/jarcoal/httpmock.v1"
+  packages = ["."]
+  revision = "cf52904a3cf0f78f199ecade6a6df8e245d5b25a"
+
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "46101f2dd8f9cc021239f669a3ad2b430caee42747a86f1f143ae31c415a70c1"
+  inputs-digest = "aa4154450077bcc15457b38082383d63c6e9be236d09e10cb5c1d90f7dbaeb83"
   solver-name = "gps-cdcl"
   solver-version = 1

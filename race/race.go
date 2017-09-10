@@ -70,8 +70,7 @@ type defaultRacer struct {
 	err           error       // err that should be passed back to requester
 }
 
-// NewRacer returns a Racer which can run a race from start to end.
-func NewRacer(startTitle string, endTitle string) Racer {
+func newDefaultRacer(startTitle string, endTitle string) *defaultRacer {
 	r := new(defaultRacer)
 	r.startTitle = startTitle
 	r.endTitle = endTitle
@@ -82,6 +81,11 @@ func NewRacer(startTitle string, endTitle string) Racer {
 	r.getLinks = make(chan string, getLinksSize)
 	r.done = make(chan bool, 1)
 	return r
+}
+
+// NewRacer returns a Racer which can run a race from start to end.
+func NewRacer(startTitle string, endTitle string) Racer {
+	return newDefaultRacer(startTitle, endTitle)
 }
 
 // handleErrInWorker contains common error handling logic for when an error

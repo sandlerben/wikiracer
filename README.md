@@ -99,7 +99,7 @@ A `race.Racer` struct encapsulates all the state needed for one race, including:
 - The page to find a path to
 - A record of how each page was reached during the race
 - A record of the links explored so far
-- Several synchronization primitives (including `sync.WaitGroup` and `sync.Once`)
+- Several synchronization primitives (including `sync.Once`)
 - Channels to allow concurrent workers to communicate  
 
 A `race.Racer` exposes one public function, `Run`, which returns a path from a start page to an end page.
@@ -130,9 +130,24 @@ There are many ways to parse JSON in Go, but I opted to use the `buger/jsonparse
 - It doesn't require you to recreated the structure of the JSON in a `struct` beforehand. This makes programming much faster.
 - In benchmarks, `jsonparser` is as fast or faster than all other Go JSON parsing libraries. [See here](https://github.com/buger/jsonparser#benchmarks). It is 10x faster than the standard `encoding/json` package!
 
-## Strategies attempted
+## Some strategies attempted
 
-I tried
+There are a few different strategies I attempted and implemented.
+
+#### No pipeline: getLinks workers can write directly to the getLinks channel, checkLinks workers can write directly to the checkLinks channel
+
+In my final implementation, pages pass through a two-stage pipeline: first they are handled by `checkLinks` and then they are handled by `getLinks`.
+
+I tried making the stages less rigid by allowing getLinks workers to immediately pass pages to other getLinks workers (instead of having to pass them to checkLinks workers). This approach noticeably decreased the performance of wikiracer because pages which actually linked to the end page were traversed further and further unnecessarily.
+
+#### Different number of worker goroutines and how to return immediately when a path is found
+
+As mentioned above, the number of each type of worker goroutine can be customized with environment variables. However, I wanted to find the best default for most races.
+
+At first,
+got rid of sync.waitgroup
+
+#### Continue?
 
 ## Time spent on project
 

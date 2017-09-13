@@ -1,5 +1,34 @@
 # wikiracer
 
+Table of Contents
+=================
+
+   * [wikiracer](#wikiracer)
+      * [Synopsis](#synopsis)
+      * [Basic Usage](#basic-usage)
+         * [Customizing behavior](#customizing-behavior)
+      * [Installation](#installation)
+      * [Run tests](#run-tests)
+      * [Profiling](#profiling)
+      * [Why Go?](#why-go)
+      * [Architecture overview](#architecture-overview)
+         * [Web](#web)
+         * [Race](#race)
+            * [checkLinks](#checklinks)
+            * [getLinks](#getlinks)
+            * [More details](#more-details)
+      * [Some strategies attempted](#some-strategies-attempted)
+            * [No pipeline: getLinks workers can write directly to the getLinks channel, checkLinks workers can write directly to the checkLinks channel](#no-pipeline-getlinks-workers-can-write-directly-to-the-getlinks-channel-checklinks-workers-can-write-directly-to-the-checklinks-channel)
+            * [Different number of worker goroutines and how to return immediately when a path is found](#different-number-of-worker-goroutines-and-how-to-return-immediately-when-a-path-is-found)
+            * [Not exploring all links on a page](#not-exploring-all-links-on-a-page)
+      * [Time spent on project](#time-spent-on-project)
+   * [Appendix](#appendix)
+      * [More technical details](#more-technical-details)
+            * [JSON parsing](#json-parsing)
+            * [Handling "Too Many Requests"](#handling-too-many-requests)
+            * [Time limit](#time-limit)
+            * [Mocking](#mocking)
+
 ## Synopsis
 
 wikiracer is a Go application which plays ["The Wikipedia Game"](https://en.wikipedia.org/wiki/Wikiracing). It takes a start page and an end page and follows hyperlinks to get from the start page to the end page as quickly as possible.

@@ -1,9 +1,11 @@
 package race
 
 import (
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	httpmock "gopkg.in/jarcoal/httpmock.v1"
 )
@@ -12,6 +14,35 @@ var (
 	checkLinksResponse = `{"batchcomplete":true,"query":{"pages":[{"pageid":8569916,"ns":0,"title":"English language","links":[{"ns":0,"title":"end"}]}]}}`
 	getLinksResponse   = `{"query":{"pages":[{"pageid":8569916,"ns":0,"title":"start","links":[{"ns":14,"title":"English language"},{"ns":14,"title":"Spanish language"},{"ns":14,"title":"French language"},{"ns":14,"title":"German language"}]}}`
 )
+
+func TestLoopUntilResponse(t *testing.T) {
+	httpmock.Activate()
+	defer httpmock.DeactivateAndReset()
+
+	requestsMadeSoFar := 0
+	httpmock.RegisterResponder("GET", "http://example.com",
+		func(req *http.Request) (*http.Response, error) {
+			var resp *http.Response
+			if requestsMadeSoFar < 2 {
+				resp = httpmock.NewStringResponse(429, "try again")
+			} else {
+				resp = httpmock.NewStringResponse(200, "good job")
+			}
+			requestsMadeSoFar++
+			return resp, nil
+		})
+
+	r := newDefaultRacer("start", "end", 1*time.Minute)
+	u, _ := url.Parse("http://example.com")
+	resp, err := r.loopUntilResponse(u)
+	if err != nil {
+		t.Error(err)
+	} else {
+		if resp.StatusCode != 200 {
+			t.Error("http code must be 200")
+		}
+	}
+}
 
 func getCheckLinksURL(samplePages []string) string {
 	u, _ := url.Parse("https://en.wikipedia.org/w/api.php")
@@ -37,7 +68,7 @@ func TestCheckLinksWorker(t *testing.T) {
 	httpmock.RegisterResponder("GET", u,
 		httpmock.NewStringResponder(200, checkLinksResponse))
 
-	r := newDefaultRacer("start", "end")
+	r := newDefaultRacer("start", "end", 1*time.Minute)
 
 	for _, page := range samplePages {
 		r.checkLinks <- page
@@ -62,7 +93,7 @@ func TestCheckLinksWorkerHandleErr(t *testing.T) {
 	httpmock.RegisterResponder("GET", u,
 		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
 
-	r := newDefaultRacer("start", "end")
+	r := newDefaultRacer("start", "end", 1*time.Minute)
 
 	for _, page := range samplePages {
 		r.checkLinks <- page
@@ -110,7 +141,7 @@ func TestGetLinksWorker(t *testing.T) {
 	httpmock.RegisterResponder("GET", u.String(),
 		httpmock.NewStringResponder(200, getLinksResponse))
 
-	r := newDefaultRacer("start", "end")
+	r := newDefaultRacer("start", "end", 1*time.Minute)
 
 	r.getLinks <- linkToGet
 
@@ -136,7 +167,7 @@ func TestGetLinksWorkerHandleErr(t *testing.T) {
 	httpmock.RegisterResponder("GET", u.String(),
 		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
 
-	r := newDefaultRacer("start", "end")
+	r := newDefaultRacer("start", "end", 1*time.Minute)
 
 	r.getLinks <- linkToGet
 

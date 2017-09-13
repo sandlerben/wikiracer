@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
 	"github.com/buger/jsonparser"
@@ -66,10 +67,11 @@ type defaultRacer struct {
 	getLinks      chan string   // parent links which should have children explored
 	done          chan bool     // once closed, all goroutines exit
 	closeOnce     sync.Once     // ensures that once is only closed once
+	timeLimit     time.Duration // explored until this limit and then give up
 	err           error         // err that should be passed back to requester
 }
 
-func newDefaultRacer(startTitle string, endTitle string) *defaultRacer {
+func newDefaultRacer(startTitle string, endTitle string, timeLimit time.Duration) *defaultRacer {
 	r := new(defaultRacer)
 	r.startTitle = startTitle
 	r.endTitle = endTitle
@@ -78,12 +80,13 @@ func newDefaultRacer(startTitle string, endTitle string) *defaultRacer {
 	r.checkLinks = make(chan string, checkLinksSize)
 	r.getLinks = make(chan string, getLinksSize)
 	r.done = make(chan bool, 1)
+	r.timeLimit = timeLimit
 	return r
 }
 
 // NewRacer returns a Racer which can run a race from start to end.
-func NewRacer(startTitle string, endTitle string) Racer {
-	return newDefaultRacer(startTitle, endTitle)
+func NewRacer(startTitle string, endTitle string, timeLimit time.Duration) Racer {
+	return newDefaultRacer(startTitle, endTitle, timeLimit)
 }
 
 // handleErrInWorker contains common error handling logic for when an error
@@ -96,6 +99,25 @@ func (r *defaultRacer) handleErrInWorker(err error) {
 	r.closeOnce.Do(func() {
 		close(r.done) // kill all goroutines
 	})
+}
+
+// loopUntilResponse makes requests to the MediaWiki API until it does not get
+// code=429 "Too Many Requests"
+func (r *defaultRacer) loopUntilResponse(u *url.URL) (*http.Response, error) {
+	var resp *http.Response
+	for {
+		var err error
+		resp, err = http.Get(u.String())
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == 429 {
+			time.Sleep(time.Millisecond * 100)
+		} else {
+			break
+		}
+	}
+	return resp, nil
 }
 
 // checkLinksIteratePages is a function which iterates through a `page` json
@@ -187,9 +209,9 @@ func (r *defaultRacer) checkLinksWorker() {
 		q.Set("pltitles", r.endTitle)
 		u.RawQuery = q.Encode()
 
-		resp, err := http.Get(u.String())
+		resp, err := r.loopUntilResponse(u)
 		if err != nil {
-			r.handleErrInWorker(errors.WithStack(err))
+			r.handleErrInWorker(err)
 			return
 		}
 		bodyBytes, err := ioutil.ReadAll(resp.Body)
@@ -252,12 +274,11 @@ func (r *defaultRacer) getLinksWorker() {
 					q.Set("continue", continueResult)
 					q.Set("plcontinue", plcontinueResult)
 				}
-
 				u.RawQuery = q.Encode()
 
-				resp, err := http.Get(u.String())
+				resp, err := r.loopUntilResponse(u)
 				if err != nil {
-					r.handleErrInWorker(errors.WithStack(err))
+					r.handleErrInWorker(err)
 					return
 				}
 				bodyBytes, err := ioutil.ReadAll(resp.Body)
@@ -268,7 +289,7 @@ func (r *defaultRacer) getLinksWorker() {
 
 				_, err = jsonparser.ArrayEach(bodyBytes, r.getLinksIteratePages, "query", "pages")
 				if err != nil {
-					r.handleErrInWorker(errors.WithStack(err))
+					r.handleErrInWorker(errors.Wrap(err, string(bodyBytes)))
 					return
 				}
 
@@ -296,6 +317,17 @@ func (r *defaultRacer) getLinksWorker() {
 	}
 }
 
+func (r *defaultRacer) giveUpAfterTime(timer *time.Timer) {
+	select {
+	case _ = <-r.done:
+		return
+	case _ = <-timer.C:
+		r.closeOnce.Do(func() {
+			close(r.done) // kill all goroutines
+		})
+	}
+}
+
 // Run finds a path from start to end and returns it.
 func (r *defaultRacer) Run() ([]string, error) {
 	r.prevMap.put(r.startTitle, "")
@@ -308,6 +340,8 @@ func (r *defaultRacer) Run() ([]string, error) {
 	for i := 0; i < config.numGetLinksRoutines; i++ {
 		go r.getLinksWorker()
 	}
+	timer := time.NewTimer(r.timeLimit)
+	go r.giveUpAfterTime(timer)
 	_ = <-r.done
 
 	if r.err != nil {
@@ -317,16 +351,21 @@ func (r *defaultRacer) Run() ([]string, error) {
 	finalPath := make([]string, 0)
 
 	currentNode := r.endTitle
-	for {
-		// append to front
-		finalPath = append([]string{currentNode}, finalPath...)
-		nextNode, ok := r.prevMap.get(currentNode)
+	// if the racer ran out of time, the endTitle won't have been found
+	if _, ok := r.prevMap.get(r.endTitle); !ok {
+		finalPath = nil
+	} else {
+		for {
+			// append to front
+			finalPath = append([]string{currentNode}, finalPath...)
+			nextNode, ok := r.prevMap.get(currentNode)
 
-		if !ok || currentNode == r.startTitle {
-			break
+			if !ok || currentNode == r.startTitle {
+				break
+			}
+
+			currentNode = nextNode
 		}
-
-		currentNode = nextNode
 	}
 	log.Debugf("at end of Run(), checkLinks length is %d, getLinks length is %d", len(r.checkLinks), len(r.getLinks))
 	return finalPath, nil

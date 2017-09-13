@@ -2,21 +2,33 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"os"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
 	logMiddleware "github.com/bakins/logrus-middleware"
 	"github.com/gorilla/mux"
 	"github.com/sandlerben/wikiracer/race"
 )
 
 var requestCache map[requestInfo][]string
+var timeLimit time.Duration
 
 func init() {
 	requestCache = make(map[requestInfo][]string)
+
+	if timeLimitString, ok := os.LookupEnv("WIKIRACER_TIME_LIMIT"); ok {
+		var err error
+		if timeLimit, err = time.ParseDuration(timeLimitString); err != nil {
+			log.Panic(err)
+		}
+	} else {
+		timeLimit = 1 * time.Minute
+	}
 }
 
 type route struct {
@@ -54,7 +66,7 @@ type requestInfo struct {
 // raceHandler returns a handler for the race endpoint which uses the supplied
 // race.Racer. The raceHandler is parameterized in this way to enable mock
 // testing.
-func raceHandler(newRacer func(a, b string) race.Racer) func(http.ResponseWriter, *http.Request) {
+func raceHandler(newRacer func(a, b string, c time.Duration) race.Racer) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		startTitle := r.URL.Query().Get("starttitle")
 		endTitle := r.URL.Query().Get("endtitle")
@@ -64,7 +76,7 @@ func raceHandler(newRacer func(a, b string) race.Racer) func(http.ResponseWriter
 			io.WriteString(w, "Must pass start and end arguments.")
 			return
 		}
-		racer := newRacer(startTitle, endTitle)
+		racer := newRacer(startTitle, endTitle, timeLimit)
 		start := time.Now()
 		currentRequestInfo := requestInfo{startTitle: startTitle, endTitle: endTitle}
 
@@ -78,11 +90,30 @@ func raceHandler(newRacer func(a, b string) race.Racer) func(http.ResponseWriter
 				io.WriteString(w, err.Error())
 				return
 			}
-			requestCache[currentRequestInfo] = path
+			if path != nil {
+				requestCache[currentRequestInfo] = path
+			}
 		}
+
 		elapsed := time.Since(start)
-		io.WriteString(w, fmt.Sprintf("took %s\n", elapsed))
-		io.WriteString(w, strings.Join(path, " --> "))
+		var output map[string]interface{}
+		if path != nil {
+			output = map[string]interface{}{
+				"path":       path,
+				"time_taken": elapsed.String(),
+			}
+		} else {
+			output = map[string]interface{}{
+				"path":       []string{},
+				"message":    fmt.Sprintf("no path found within %s", timeLimit),
+				"time_taken": timeLimit.String(),
+			}
+		}
+		jsonOutput, err := json.MarshalIndent(output, "", "    ")
+		if err != nil {
+			log.Panic(err)
+		}
+		w.Write(jsonOutput)
 	}
 }
 

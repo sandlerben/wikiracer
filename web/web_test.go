@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/sandlerben/wikiracer/mocks"
 	"github.com/sandlerben/wikiracer/race"
@@ -38,13 +39,14 @@ func TestHealthHandler(t *testing.T) {
 }
 
 func TestRaceHandlerMissingArgsError(t *testing.T) {
+	requestCache = make(map[requestInfo][]string)
 	req, err := http.NewRequest("GET", "/race?starttitle=start", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	rr := httptest.NewRecorder()
-	mockNewRacer := func(a, b string) race.Racer {
+	mockNewRacer := func(a, b string, c time.Duration) race.Racer {
 		return new(mocks.Racer)
 	}
 	handler := http.HandlerFunc(raceHandler(mockNewRacer))
@@ -58,6 +60,7 @@ func TestRaceHandlerMissingArgsError(t *testing.T) {
 }
 
 func TestRaceHandlerErrorPropogated(t *testing.T) {
+	requestCache = make(map[requestInfo][]string)
 	req, err := http.NewRequest("GET", "/race?starttitle=start&endtitle=end", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +68,7 @@ func TestRaceHandlerErrorPropogated(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	mockRacer := new(mocks.Racer)
-	newRacer := func(a, b string) race.Racer {
+	newRacer := func(a, b string, c time.Duration) race.Racer {
 		return mockRacer
 	}
 	handler := http.HandlerFunc(raceHandler(newRacer))
@@ -82,6 +85,7 @@ func TestRaceHandlerErrorPropogated(t *testing.T) {
 }
 
 func TestRaceHandlerNothingInCache(t *testing.T) {
+	requestCache = make(map[requestInfo][]string)
 	req, err := http.NewRequest("GET", "/race?starttitle=start&endtitle=end", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +93,7 @@ func TestRaceHandlerNothingInCache(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	mockRacer := new(mocks.Racer)
-	newRacer := func(a, b string) race.Racer {
+	newRacer := func(a, b string, c time.Duration) race.Racer {
 		return mockRacer
 	}
 	handler := http.HandlerFunc(raceHandler(newRacer))
@@ -105,7 +109,33 @@ func TestRaceHandlerNothingInCache(t *testing.T) {
 	mockRacer.AssertNumberOfCalls(t, "Run", 1)
 }
 
+func TestRaceHandlerNothingInCacheNoPathReturned(t *testing.T) {
+	requestCache = make(map[requestInfo][]string)
+	req, err := http.NewRequest("GET", "/race?starttitle=start&endtitle=end", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	mockRacer := new(mocks.Racer)
+	newRacer := func(a, b string, c time.Duration) race.Racer {
+		return mockRacer
+	}
+	handler := http.HandlerFunc(raceHandler(newRacer))
+	mockRacer.On("Run").Return(nil, nil)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusUnprocessableEntity)
+	}
+
+	mockRacer.AssertNumberOfCalls(t, "Run", 1)
+}
+
 func TestRaceHandlerPathInCache(t *testing.T) {
+	requestCache = make(map[requestInfo][]string)
 	info := requestInfo{
 		startTitle: "start",
 		endTitle:   "end",
@@ -119,7 +149,7 @@ func TestRaceHandlerPathInCache(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	mockRacer := new(mocks.Racer)
-	newRacer := func(a, b string) race.Racer {
+	newRacer := func(a, b string, c time.Duration) race.Racer {
 		return mockRacer
 	}
 	handler := http.HandlerFunc(raceHandler(newRacer))
@@ -135,6 +165,7 @@ func TestRaceHandlerPathInCache(t *testing.T) {
 }
 
 func TestRaceHandlerForceIgnoreCache(t *testing.T) {
+	requestCache = make(map[requestInfo][]string)
 	info := requestInfo{
 		startTitle: "start",
 		endTitle:   "end",
@@ -148,7 +179,7 @@ func TestRaceHandlerForceIgnoreCache(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	mockRacer := new(mocks.Racer)
-	newRacer := func(a, b string) race.Racer {
+	newRacer := func(a, b string, c time.Duration) race.Racer {
 		return mockRacer
 	}
 	handler := http.HandlerFunc(raceHandler(newRacer))

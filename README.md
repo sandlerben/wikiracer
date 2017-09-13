@@ -6,10 +6,11 @@ wikiracer is a Go application which plays ["The Wikipedia Game"](https://en.wiki
 
 ## Basic Usage
 
-Start a wikiracer server on port `8000` (the port can be customized with the `WIKIRACER_PORT` environment variable)
+Start a wikiracer server on port `8000`.
 
 ```
 $ wikiracer
+INFO[0000] Server is running at http://localhost:8000
 ```
 
 In order to initiate a race, make a `GET` request to the server's `/race` endpoint with the following arguments.
@@ -43,7 +44,7 @@ If no path was found in the time limit (see below), the JSON response will look 
 
 ### Customizing behavior
 
-The following environment variables can be set to customize the behavior of wikiracer.
+The following environment variables can be used to customize the behavior of wikiracer.
 
 - `WIKIRACER_PORT`: The port on which to run a HTTP server (default `8000`).
 - `NUM_CHECK_LINKS_ROUTINES`: The number of concurrent checkLinks workers to run (default 10).
@@ -115,7 +116,7 @@ The `wikiracer/web` package also features a simple cache of paths previously fou
 
 The `wikiracer/race` encapsulates the Wikipedia exploring logic; it is the most interesting part of the application.
 
-A `race.Racer` struct encapsulates all the state needed for one race, including:
+A `race.Racer` encapsulates all the state needed for one race, including:
 
 - The page to start at
 - The page to find a path to
@@ -139,7 +140,7 @@ These stages are described in more detail below.
 
 The `checkLinks` channel contains pages which _may_ link to the end page. `checkLinks` workers take up to 50 pages from the `checkLinks` channel and checks if any of them link to the end page. The workers call the MediaWiki API with several parameters including `prop=links` and `pltitles=<end title>` parameters. The `pltitles` parameter is **extremely** useful: it asks the MediaWiki API to check whether any of up to 50 pages links to a certain page. It returns a response in only a few hundred milliseconds!
 
-If none of the pages link to the end, the pages are added to the `getLinks` channel.
+If none of the pages link to the end, the pages are written to the `getLinks` channel.
 
 #### getLinks
 
@@ -150,8 +151,6 @@ The `getLinks` channel contains pages which _do not_ link to the end page. `getL
 Lots more fun technical implementation details can be found in the [appendix below](#appendix).
 
 ## Some strategies attempted
-
-There are a few different strategies I attempted and implemented.
 
 #### No pipeline: getLinks workers can write directly to the getLinks channel, checkLinks workers can write directly to the checkLinks channel
 
@@ -172,17 +171,17 @@ In the original implementation, the main request goroutine waited for **all** wo
 3. [Eventually, maybe after a second or more] All the workers reached the code which checks if `done` is closed and then exited.
 4. After all workers exited, the main goroutine was unblocked and returned the path.
 
-A key problem with this approach was that **the time taken by step 3 grew linearly with the number of concurrent workers**.
+A key problem with this approach was that **the time taken by step 3 grew with the number of concurrent workers**.
 
-I started with two `checkLinks` workers and two `getLinks` workers. While increasing the number of concurrent workers led to the end page being found faster, these gains were eaten up by increasing the time of **step 3**.
+I started with two `checkLinks` workers and two `getLinks` workers. While increasing the number of concurrent workers led to the end page being found faster, these gains were eaten up by **a longer step 3**.
 
-I solved this problem by making the main goroutine wait for the `done` channel to be closed instead of a `sync.WaitGroup`. In effect, this unblocks the main goroutine even before all the worker goroutines exit. This approach, coupled with increasing the number of concurrent workers significantly increased the response time (doubling/tripling it in some case!).
+I solved this problem by having the main goroutine wait for the `done` channel to be closed instead of using a `sync.WaitGroup`. In effect, this unblocks the main goroutine even before all the worker goroutines exit. This approach, coupled with increasing the number of concurrent workers significantly increased the response time (doubling/tripling it in some cases!).
 
 #### Not exploring all links on a page
 
 Sometimes, the MediaWiki API doesn't return all links for a page in once response. The default behavior of the application is to query the API until all the links are returned. However, I hypothesized that _not_ exploring all the links for a page would make wikiracer faster. My thoughts were the following:
 
-- Links on a Wikipedia page are probably pretty thematically similar topic to that page.
+- Links on a Wikipedia page are probably pretty similar (topic-wise) to that page.
 - If all the links on every page were explored, the wikiracer could get "trapped" in one topic area of Wikipedia and keep exploring related pages.
 - Therefore, ignoring some links on pages would get to other parts of Wikipedia and find the end page faster.
 
@@ -203,23 +202,23 @@ It turned out that when I tested this approach, wikiracer did consistently worse
 
 ## More technical details
 
-##### JSON parsing
+#### JSON parsing
 
 There are many ways to parse JSON in Go, but I opted to use the `buger/jsonparser` library for a few reasons:
 
-- It doesn't require you to recreated the structure of the JSON in a `struct` beforehand. This makes programming much faster.
+- It doesn't require you to recreate the structure of the JSON in a `struct` beforehand. This makes programming much faster.
 - In benchmarks, `jsonparser` is as fast or faster than all other Go JSON parsing libraries. [See here](https://github.com/buger/jsonparser#benchmarks). It is 10x faster than the standard `encoding/json` package!
 
-##### Handling "Too Many Requests"
+#### Handling "Too Many Requests"
 
-Clearly, the MediaWiki API ought to be called as often as possible in order to return an answer as fast as possible. However, the API documentation [does not include a clear quota or request limit](https://www.mediawiki.org/wiki/API:Etiquette#Request_limit). Rather, the API will return `429 Too Many Requests` occasionally.
+Clearly, the MediaWiki API ought to be called as often as possible in order to find a path as fast as possible. However, the API documentation [does not include a clear quota or request limit](https://www.mediawiki.org/wiki/API:Etiquette#Request_limit). Rather, the API will return `429 Too Many Requests` occasionally.
 
 To get around this, I abstracted the core requesting code into a function called `loopUntilResponse` which makes a request. If it receives a `429 Too Many Requests`, it waits for 100 milliseconds and tries the request again.
 
-##### Time limit
+#### Time limit
 
 The time limit is enforced by the `giveUpAfterTime` worker. It takes a `time.Timer`, and when the `Timer` finishes, the `giveUpAfterTime` reads a message from the `timer.C` channel and closes the `done` channel.
 
-##### Mocking
+#### Mocking
 
 [Mock testing](https://github.com/stretchr/testify) is key to isolating a specific part of the code in a unit test. Therefore, when testing the `race` package, I used [`httpmock`](https://github.com/jarcoal/httpmock) to mock the responses to `http.Get`. When testing the `web` package, I used [`mockery`](https://github.com/vektra/mockery) and [`testify`](https://github.com/stretchr/testify) to create a mock `race.Racer` for testing.

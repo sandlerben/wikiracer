@@ -75,6 +75,10 @@ func raceHandler(newRacer func(a, b string, c time.Duration) race.Racer) func(ht
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			io.WriteString(w, "Must pass start and end arguments.")
 			return
+		} else if startTitle == endTitle {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			io.WriteString(w, "starttitle cannot equal endtitle")
+			return
 		}
 		racer := newRacer(startTitle, endTitle, timeLimit)
 		start := time.Now()

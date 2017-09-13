@@ -89,7 +89,7 @@ $ dep ensure
 Finally, install wikiracer.
 
 ```
-go install
+$ go install
 ```
 
 # Run tests
@@ -97,7 +97,7 @@ go install
 The full test suite can be run with:
 
 ```
-go test ./...
+$ go test ./...
 ```
 
 # Profiling
@@ -132,7 +132,7 @@ The `wikiracer/web` package also features a simple cache of paths previously fou
 
 ## Race
 
-The `wikiracer/race` encapsulates the Wikipedia exploring logic; it is the most interesting part of the application.
+The `wikiracer/race` package encapsulates the Wikipedia exploring logic; it is the most interesting part of the application.
 
 A `race.Racer` encapsulates all the state needed for one race, including:
 

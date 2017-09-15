@@ -75,7 +75,7 @@ The following environment variables can be used to customize the behavior of wik
 Create a directory and clone the repo:
 
 ```
-$ mkdir $GOPATH/src/github.com/sandlerben/wikiracer
+$ mkdir -p $GOPATH/src/github.com/sandlerben/wikiracer
 $ cd $GOPATH/src/github.com/sandlerben/wikiracer
 $ git clone https://github.com/sandlerben/wikiracer.git .
 ```

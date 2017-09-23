@@ -15,26 +15,30 @@ type Racer interface {
 }
 
 type defaultRacer struct {
-	startTitle    string
-	endTitle      string
-	prevMap       concurrentMap // mapping from childPage -> parentPage
-	linksExplored concurrentMap // set of links which have passed through getLinks
-	checkLinks    chan string   // links which may connect to endTitle
-	getLinks      chan string   // parent links which should have children explored
+	startTitle       string
+	endTitle         string
+	pathFromStartMap concurrentMap // mapping from childPage -> parentPage
+	pathFromEndMap   concurrentMap // mapping from childPage -> parentPage
+	// checkLinks       chan string   // links which may connect to endTitle
+	forwardLinks  chan string   // parent links which should have children explored
+	backwardLinks chan string   // parent links which should have children explored
 	done          chan bool     // once closed, all goroutines exit
 	closeOnce     sync.Once     // ensures that once is only closed once
 	timeLimit     time.Duration // explored until this limit and then give up
 	err           error         // err that should be passed back to requester
+	meetingPoint  string        // TODO: document
 }
 
 func newDefaultRacer(startTitle string, endTitle string, timeLimit time.Duration) *defaultRacer {
 	r := new(defaultRacer)
 	r.startTitle = startTitle
 	r.endTitle = endTitle
-	r.prevMap = concurrentMap{m: make(map[string]string)}
-	r.linksExplored = concurrentMap{m: make(map[string]string)}
-	r.checkLinks = make(chan string, checkLinksSize)
-	r.getLinks = make(chan string, getLinksSize)
+	r.pathFromStartMap = concurrentMap{m: make(map[string]string)}
+	r.pathFromEndMap = concurrentMap{m: make(map[string]string)}
+	// r.linksExplored = concurrentMap{m: make(map[string]string)}
+	// r.checkLinks = make(chan string, checkLinksSize)
+	r.forwardLinks = make(chan string, forwardLinksSize)
+	r.backwardLinks = make(chan string, backwardLinksSize)
 	r.done = make(chan bool, 1)
 	r.timeLimit = timeLimit
 	return r
@@ -47,15 +51,17 @@ func NewRacer(startTitle string, endTitle string, timeLimit time.Duration) Racer
 
 // Run finds a path from start to end and returns it.
 func (r *defaultRacer) Run() ([]string, error) {
-	r.prevMap.put(r.startTitle, "")
-	r.linksExplored.put(r.startTitle, "")
-	r.getLinks <- r.startTitle
-	r.checkLinks <- r.startTitle
-	for i := 0; i < config.numCheckLinksRoutines; i++ {
-		go r.checkLinksWorker()
-	}
-	for i := 0; i < config.numGetLinksRoutines; i++ {
-		go r.getLinksWorker()
+	r.pathFromStartMap.put(r.startTitle, "")
+	r.pathFromEndMap.put(r.endTitle, "")
+	// r.linksExplored.put(r.startTitle, "")
+	r.forwardLinks <- r.startTitle
+	r.backwardLinks <- r.endTitle
+	// r.checkLinks <- r.startTitle
+	// for i := 0; i < config.numCheckLinksRoutines; i++ {
+	// 	go r.checkLinksWorker()
+	// }
+	for i := 0; i < config.numForwardLinksRoutines; i++ {
+		go r.forwardLinksWorker()
 	}
 	timer := time.NewTimer(r.timeLimit)
 	go r.giveUpAfterTime(timer)
@@ -65,17 +71,19 @@ func (r *defaultRacer) Run() ([]string, error) {
 		return nil, errors.WithStack(r.err)
 	}
 
+	log.Info(r.meetingPoint)
+
 	finalPath := make([]string, 0)
 
 	currentNode := r.endTitle
 	// if the racer ran out of time, the endTitle won't have been found
-	if _, ok := r.prevMap.get(r.endTitle); !ok {
+	if _, ok := r.pathFromStartMap.get(r.endTitle); !ok {
 		finalPath = nil
 	} else {
 		for {
 			// append to front
 			finalPath = append([]string{currentNode}, finalPath...)
-			nextNode, ok := r.prevMap.get(currentNode)
+			nextNode, ok := r.pathFromStartMap.get(currentNode)
 
 			if !ok || currentNode == r.startTitle {
 				break
@@ -84,6 +92,6 @@ func (r *defaultRacer) Run() ([]string, error) {
 			currentNode = nextNode
 		}
 	}
-	log.Debugf("at end of Run(), checkLinks length is %d, getLinks length is %d", len(r.checkLinks), len(r.getLinks))
+	// log.Debugf("at end of Run(), checkLinks length is %d, forwardLinks length is %d", len(r.checkLinks), len(r.forwardLinks))
 	return finalPath, nil
 }

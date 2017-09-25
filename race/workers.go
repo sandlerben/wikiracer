@@ -1,7 +1,6 @@
 package race
 
 import (
-	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -13,6 +12,13 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/buger/jsonparser"
 	"github.com/pkg/errors"
+)
+
+type workerType int
+
+const (
+	forwardType workerType = iota
+	backwardType
 )
 
 var (
@@ -88,94 +94,69 @@ func (r *defaultRacer) loopUntilResponse(u *url.URL) (*http.Response, error) {
 	return resp, nil
 }
 
-// forwardLinksIteratePages is a function which iterates through a `page` json
-// blob for forwardLinks. It is compliant with the jsonparser.ArrayEach API.
-func (r *defaultRacer) forwardLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
-	parentPageTitle, err := jsonparser.GetString(page, "title")
-	if err != nil {
-		r.handleErrInWorker(errors.WithStack(err))
-		return
+// higherOrderIteratePages returns a function which iterates through a `page`
+// json blob for a worker. The function returned is compliant with the
+// jsonparser.ArrayEach API.
+//
+// A higher order function is used here because the logic for forwardLinks
+// and backwardLinks workers is extremely similar (with a few variables
+// swapped.)
+func (r *defaultRacer) higherOrderIteratePages(wType workerType) func([]byte, jsonparser.ValueType, int, error) {
+	var mapFromMyComponent, mapFromOtherComponent *concurrentMap
+	var myChan chan string
+	var linksJSONKey string
+
+	if wType == forwardType {
+		mapFromMyComponent, mapFromOtherComponent = &r.pathFromStartMap, &r.pathFromEndMap
+		myChan = r.forwardLinks
+		linksJSONKey = "links"
+	} else if wType == backwardType {
+		mapFromMyComponent, mapFromOtherComponent = &r.pathFromEndMap, &r.pathFromStartMap
+		myChan = r.backwardLinks
+		linksJSONKey = "linkshere"
 	}
-	// the error here would just imply a missing key, it can be ignored
-	missing, _ := jsonparser.GetBoolean(page, "missing")
-	if missing {
-		r.handleErrInWorker(errors.New(fmt.Sprintf("the page %s does not exist", parentPageTitle)))
-		return
-	}
-	_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
-		childPageTitle, err := jsonparser.GetString(link, "title")
+
+	return func(page []byte, dataType jsonparser.ValueType, offset int, err error) {
+		parentPageTitle, err := jsonparser.GetString(page, "title")
 		if err != nil {
 			r.handleErrInWorker(errors.WithStack(err))
 			return
 		}
-		if _, ok := r.pathFromEndMap.get(childPageTitle); ok {
-			log.Debugf("found answer in forwardLinks worker! intersection at %s", childPageTitle)
-			r.pathFromStartMap.put(childPageTitle, parentPageTitle)
-
-			r.meetingPoint.set(childPageTitle)
-
-			r.closeOnce.Do(func() {
-				close(r.done)
-			}) // kill all goroutines
+		// the error here would just imply a missing key, it can be ignored
+		missing, _ := jsonparser.GetBoolean(page, "missing")
+		if missing {
+			r.handleErrInWorker(errors.Errorf("the page %s does not exist", parentPageTitle))
 			return
 		}
-		_, childOk := r.pathFromStartMap.get(childPageTitle)
-		if !childOk && childPageTitle != parentPageTitle {
-			r.pathFromStartMap.put(childPageTitle, parentPageTitle)
-			r.forwardLinks <- childPageTitle
-		}
-	}, "links")
-	if err != nil {
-		_, dataType, _, _ := jsonparser.Get(page, "links")
-		if dataType != jsonparser.NotExist {
-			r.handleErrInWorker(errors.WithStack(err))
-			return
-		}
-	}
-}
+		_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
+			childPageTitle, err := jsonparser.GetString(link, "title")
+			if err != nil {
+				r.handleErrInWorker(errors.WithStack(err))
+				return
+			}
+			if _, ok := mapFromOtherComponent.get(childPageTitle); ok {
+				log.Debugf("found answer in worker! intersection at %s", childPageTitle)
+				mapFromMyComponent.put(childPageTitle, parentPageTitle)
 
-// backwardLinksIteratePages is a function which iterates through a `page` json
-// blob for backwardLinks. It is compliant with the jsonparser.ArrayEach API.
-func (r *defaultRacer) backwardLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
-	parentPageTitle, err := jsonparser.GetString(page, "title")
-	if err != nil {
-		r.handleErrInWorker(errors.WithStack(err))
-		return
-	}
-	// the error here would just imply a missing key, it can be ignored
-	missing, _ := jsonparser.GetBoolean(page, "missing")
-	if missing {
-		r.handleErrInWorker(errors.New(fmt.Sprintf("the page %s does not exist", parentPageTitle)))
-		return
-	}
-	_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
-		childPageTitle, err := jsonparser.GetString(link, "title")
+				r.meetingPoint.set(childPageTitle)
+
+				r.closeOnce.Do(func() {
+					close(r.done)
+				}) // kill all goroutines
+				return
+			}
+			_, childOk := mapFromMyComponent.get(childPageTitle)
+			if !childOk && childPageTitle != parentPageTitle {
+				mapFromMyComponent.put(childPageTitle, parentPageTitle)
+				myChan <- childPageTitle
+			}
+		}, linksJSONKey)
 		if err != nil {
-			r.handleErrInWorker(errors.WithStack(err))
-			return
-		}
-		if _, ok := r.pathFromStartMap.get(childPageTitle); ok {
-			log.Debugf("found answer in backwardsLinks worker! intersection at %s", childPageTitle)
-
-			r.meetingPoint.set(childPageTitle)
-
-			r.pathFromEndMap.put(childPageTitle, parentPageTitle)
-			r.closeOnce.Do(func() {
-				close(r.done)
-			}) // kill all goroutines
-			return
-		}
-		_, childOk := r.pathFromEndMap.get(childPageTitle)
-		if !childOk && childPageTitle != parentPageTitle {
-			r.pathFromEndMap.put(childPageTitle, parentPageTitle)
-			r.backwardLinks <- childPageTitle
-		}
-	}, "linkshere")
-	if err != nil {
-		_, dataType, _, _ := jsonparser.Get(page, "linkshere")
-		if dataType != jsonparser.NotExist {
-			r.handleErrInWorker(errors.WithStack(err))
-			return
+			_, dataType, _, _ := jsonparser.Get(page, linksJSONKey)
+			if dataType != jsonparser.NotExist {
+				r.handleErrInWorker(errors.WithStack(err))
+				return
+			}
 		}
 	}
 }
@@ -232,8 +213,9 @@ func (r *defaultRacer) forwardLinksWorker() {
 					r.handleErrInWorker(errors.WithStack(err))
 					return
 				}
+				// log.Debug(string(bodyBytes))
 
-				_, err = jsonparser.ArrayEach(bodyBytes, r.forwardLinksIteratePages, "query", "pages")
+				_, err = jsonparser.ArrayEach(bodyBytes, r.higherOrderIteratePages(forwardType), "query", "pages")
 				if err != nil {
 					r.handleErrInWorker(errors.Wrap(err, string(bodyBytes)))
 					return
@@ -287,9 +269,8 @@ func (r *defaultRacer) backwardLinksWorker() {
 			q.Set("action", "query")
 			q.Set("format", "json")
 			q.Set("prop", "linkshere")
-			q.Set("lhprop", "title")   // TODO: MAYBE DO THIS FOR FORWARD
-			q.Set("titles", linkToGet) // TODO: try multiple titles here?
-			// q.Set("redirects", "1")
+			q.Set("lhprop", "title")
+			q.Set("titles", linkToGet)
 			q.Set("formatversion", "2")
 			q.Set("lhlimit", "500")
 			if config.exploreOnlyArticles {
@@ -315,7 +296,7 @@ func (r *defaultRacer) backwardLinksWorker() {
 					return
 				}
 
-				_, err = jsonparser.ArrayEach(bodyBytes, r.backwardLinksIteratePages, "query", "pages")
+				_, err = jsonparser.ArrayEach(bodyBytes, r.higherOrderIteratePages(backwardType), "query", "pages")
 				if err != nil {
 					r.handleErrInWorker(errors.Wrap(err, string(bodyBytes)))
 					return

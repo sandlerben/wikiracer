@@ -3,6 +3,8 @@ wikiracer
 
 wikiracer is a Go application which plays ["The Wikipedia Game"](https://en.wikipedia.org/wiki/Wikiracing). It takes a start page and an end page and follows hyperlinks to get from the start page to the end page as quickly as possible.
 
+_Note: The original version of wikiracer can be found on [branch v1](https://github.com/sandlerben/wikiracer/tree/v1)._
+
 Table of Contents
 =================
 
@@ -15,8 +17,7 @@ Table of Contents
    * [Architecture overview](#architecture-overview)
       * [Web](#web)
       * [Race](#race)
-         * [checkLinks](#checklinks)
-         * [getLinks](#getlinks)
+         * [Concurrent graph traversal](#concurrent-graph-traversal)
          * [More details](#more-details)
    * [Some strategies attempted](#some-strategies-attempted)
    * [Time spent on project](#time-spent-on-project)
@@ -43,10 +44,10 @@ The endpoint returns a JSON response containing a path from the start page to th
 {
     "path": [
         "English language",
-        "American English",
+        "International Phonetic Alphabet",
         "University of Pennsylvania"
     ],
-    "time_taken": "384.565858ms"
+    "time_taken": "72.815763ms"
 }
 ```
 
@@ -65,10 +66,11 @@ If no path was found in the time limit (see below), the JSON response will look 
 The following environment variables can be used to customize the behavior of wikiracer.
 
 - `WIKIRACER_PORT`: The port on which to run a HTTP server (default `8000`).
-- `NUM_CHECK_LINKS_ROUTINES`: The number of concurrent checkLinks workers to run (default 10).
-- `NUM_GET_LINKS_ROUTINES`: The number of concurrent getLinks workers to run (default 5).
 - `EXPLORE_ALL_LINKS`: Sometimes, the MediaWiki API doesn't return all links in once response. As a result, wikiracer continues to query the MediaWiki API until all the links are returned. If `EXPLORE_ALL_LINKS` is set to `"false"`, then wikiracer will not continue even if there are more links.
-- `WIKIRACER_TIME_LIMIT`: The time limit for the race, after which wikiracer gives up. Must be a string which can be understood by [time.ParseDuration](https://golang.org/pkg/time/#ParseDuration).
+- `EXPLORE_ONLY_ARTICLES`: By default, the wikiracer only searches the main Wikipedia namespace, which includes all encyclopedia articles, lists, disambiguation pages, and encyclopedia redirects. If `EXPLORE_ONLY_ARTICLES` is set to `"false"`, then wikiracer will explore all Wikipedia namespaces. (Read more about namespaces [here](https://en.wikipedia.org/wiki/Wikipedia:Namespace).)
+- `WIKIRACER_TIME_LIMIT`: The time limit for the race, after which wikiracer gives up. Must be a string which can be understood by [time.ParseDuration](https://golang.org/pkg/time/#ParseDuration) (default `1m`).
+- `NUM_FORWARD_LINKS_ROUTINES`: The number of concurrent getLinks workers to run (default 15).
+- `NUM_BACKWARD_LINKS_ROUTINES`: The number of concurrent getLinks workers to run (default 15).
 
 # Installation
 
@@ -138,31 +140,36 @@ A `race.Racer` encapsulates all the state needed for one race, including:
 
 - The page to start at
 - The page to find a path to
-- A record of how each page was reached during the race
-- A record of the links explored so far
+- A record of how pages found traversing from the start page were reached during the race
+- A record of how pages found traversing backwards from the end page were reached during the race
 - Synchronization primitives (`sync.Once`)
 - Channels to allow concurrent workers to communicate  
+- A `meetingPoint` (which can be used to compute a full path as will be described below)
+- Any errors that occurred during the race
 
 A `race.Racer` exposes one public function, `Run`, which returns a path from a start page to an end page.
 
-Under the hood, there is a lot going on inside the `race` package. Specifically, a number of `checkLinks` workers and `getLinks` workers concurrently explore the graph of Wikipedia pages while communicating with each other (via channels) until a path to the end page is found.
+Under the hood, there is a lot going on inside the `race` package. Specifically, a number of `forwardLinks` workers and `backwardLinks` workers concurrently explore the graph of Wikipedia pages until a path to the end page is found.
 
-At a high level, pages pass through the following pipeline:
+At a high level, the Wikipedia graph is explored in the following manner:
 
-1. A page is added to the `checkLinks` channel. A `checkLinks` worker checks if the page connects to the end page. If it does, a path has been found! If not, add the page to the `getLinks` channel.
-2. A `getLinks` worker takes the page and adds all the pages linked to from the page ("children" pages) to the `checkLinks` channel.
+1. The start page is added to the `forwardLinks` channel and the end page is added to the `backwardLinks` channel.
+2. `forwardLinks` workers traverse the Wikipedia graph _forward_ from the start page. At each iteration, they read a page from the `forwardLinks` channel and call the MediaWiki API to add all pages linked _from_ that page to the channel. In other words, they traverse the start page's [connected component](http://mathworld.wolfram.com/WeaklyConnectedComponent.html) (technically, weakly connected component since the graph is directed).
+3. `backwardLinks` workers traverse the Wikipedia graph _backward_ from the end page. At each iteration, they read a page from the `backwardLinks` channel and call the MediaWiki API to add all pages which link _to_ that page to the channel. In other words, they traverse the end page's connected component.
 
 These stages are described in more detail below.
 
-### checkLinks
+### Concurrent graph traversal
 
-The `checkLinks` channel contains pages which _may_ link to the end page. `checkLinks` workers take up to 50 pages from the `checkLinks` channel and checks if any of them link to the end page. The workers call the MediaWiki API with several parameters including `prop=links` and `pltitles=<end title>` parameters. The `pltitles` parameter is **extremely** useful: it asks the MediaWiki API to check whether any of up to 50 pages links to a certain page. It returns a response in only a few hundred milliseconds!
+Clearly, the `forwardLinks` and `backwardLinks` workers are quite similar (and much of the code is shared between them). `forwardLinks` workers explore the start page's connected component and `backwardLinks` explore the end page's connected component. The main differences between the workers are the requests each make to the MediaWiki API. For `forwardLinks` the `links` property is queried; for `backwardLinks` the `linkshere` property is queried.
 
-If none of the pages link to the end, the pages are written to the `getLinks` channel.
+These workers execute as follows:
 
-### getLinks
-
-The `getLinks` channel contains pages which _do not_ link to the end page. `getLinks` workers take a page from the `getLinks` channel and adds all the pages linked from that page to the `checkLinks` channel. These workers also called the MediaWiki API with `prop=links`. To make sure pages pages from all parts of the alphabet are explored, `pldir` is randomly switched between `descending` and `ascending`.
+1. Iterate until the `done` channel is closed (this is a signal that all workers should exit).
+2. At each iteration, take a page from the worker's channel. Query for the page's `links` or `linkshere` (which are essentially the page's "neighbors").
+3. Check if any of these "neighbors" crosses [the cut](https://en.wikipedia.org/wiki/Cut_(graph_theory)) between the start page's connected component and the end page's connected component. If they do, save this `meetingPoint` and close the `done` channel to signal that an answer was found.
+4. If not, map these neighbors to the original page in the relevant mapping (`pathFromStartMap` for `forwardLinks` and `pathFromEndMap` for `backwardLinks`). These maps are used to recreate a path from start to end when a `meetingPoint` is found.
+5. Eventually, after some time limit (1 minute by default) if no path is found, all workers give up.
 
 ### More details
 
@@ -170,28 +177,35 @@ Lots more fun technical implementation details can be found in the [appendix bel
 
 # Some strategies attempted
 
-### No pipeline: getLinks workers can write directly to the getLinks channel, checkLinks workers can write directly to the checkLinks channel
+### checkLinks and getLinks workers
 
-In my final implementation, pages pass through a two-stage pipeline: first they are handled by `checkLinks` and then they are handled by `getLinks`.
+The original version of wikiracer worked quite differently and it is fully described [here](https://github.com/sandlerben/wikiracer/blob/v1/README.md#race).
 
-I tried making the stages less rigid by allowing getLinks workers to immediately pass pages to other getLinks workers (instead of having to pass them to checkLinks workers). This approach noticeably decreased the performance of wikiracer because pages which actually linked to the end page were traversed further and further unnecessarily.
+At a high level, the old implementation worked as follows. Pages passed through a two-stage pipeline:
+
+- A page was added to the checkLinks channel. A checkLinks worker checked if the page connected to the end page using the `pltitles` parameter of the MediaWiki API. If it did, wikiracer returned. If it did not, the page was added to the getLinks channel.
+- A getLinks worker took the page and added all the "neighbor" pages linked from the page to the checkLinks channel.
+
+While this approach worked for most cases, it performed poorly when few pages linked to the end page. For example, with an end page like "Segment", which is a disambiguation page linked to by maybe about a dozen other pages, wikiracer would not find an answer.
+
+In contrast, the new approach which also traverses backwards from the end page can "escape" end pages with low in-degree. The new approach finds pages that are much more likely to be found while traversing from the start page.
 
 ### Different number of worker goroutines and how to return immediately when a path is found
 
-As mentioned above, the number of `checkLinks`/`getLinks` worker goroutine can be customized. However, I wanted to find the best default for most races.
+As mentioned above, the number of `forwardLinks`/`backwardLinks` worker goroutine can be customized. However, I wanted to find the best default for most races.
 
-First, some background. All workers check to see if a channel called `done` is closed before getting work from the `getLinks` or `checkLinks` channels. A closing of `done` is the signal that all the workers should stop working and exit.
+First, some background. All workers check to see if a channel called `done` is closed before getting work from the `forwardLinks` or `backwardLinks` channels. A closing of `done` is the signal that all the workers should stop working and exit.
 
 In the original implementation, the main request goroutine waited for **all** worker goroutines to exit using a [`sync.WaitGroup`](https://golang.org/pkg/sync/#WaitGroup). When the end page was found, the following happened:
 
-1. A `checkLinks` worker found the end page. Success!
+1. A worker found a `meetingPoint`. Success!
 2. The worker closed `done` to signal that all the other workers could stop.
 3. [Eventually, maybe after a second or more] All the workers reached the code which checks if `done` is closed and then exited.
 4. After all workers exited, the main goroutine was unblocked and returned the path.
 
 A key problem with this approach was that **the time taken by step 3 grew with the number of concurrent workers**.
 
-I started with two `checkLinks` workers and two `getLinks` workers. While increasing the number of concurrent workers led to the end page being found faster, these gains were eaten up by **a longer step 3**.
+I started with two of one worker type and two of the other worker type. While increasing the number of concurrent workers led to the end page being found faster, these gains were eaten up by **a longer step 3**.
 
 I solved this problem by having the main goroutine wait for the `done` channel to be closed instead of using a `sync.WaitGroup`. In effect, this unblocks the main goroutine even before all the worker goroutines exit. This approach, coupled with increasing the number of concurrent workers significantly increased the response time (doubling/tripling it in some cases!).
 

@@ -1,6 +1,7 @@
 package race
 
 import (
+	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net/http"
@@ -15,14 +16,15 @@ import (
 )
 
 var (
-	backwardLinksSize = 10000000
-	forwardLinksSize  = 10000000
+	forwardLinksChannelSize  = 10000000
+	backwardLinksChannelSize = 10000000
 )
 
 type configuration struct {
-	numCheckLinksRoutines   int
-	numForwardLinksRoutines int
-	exploreAllLinks         bool
+	numForwardLinksRoutines  int
+	numBackwardLinksRoutines int
+	exploreAllLinks          bool
+	exploreOnlyArticles      bool
 }
 
 // Config represents the configuration for this wikiracer.
@@ -30,21 +32,25 @@ var config configuration
 
 func init() {
 	config = configuration{
-		numCheckLinksRoutines:   10,
-		numForwardLinksRoutines: 5,
-		exploreAllLinks:         true,
+		numForwardLinksRoutines:  15,
+		numBackwardLinksRoutines: 15,
+		exploreAllLinks:          false,
+		exploreOnlyArticles:      true,
 	}
 
 	var err error
-	// if numCheckLinksRoutines, ok := os.LookupEnv("NUM_CHECK_LINKS_ROUTINES"); ok {
-	// 	config.numCheckLinksRoutines, err = strconv.Atoi(numCheckLinksRoutines)
-	// }
-	// TODO: rename these variables
-	if numForwardLinksRoutines, ok := os.LookupEnv("NUM_GET_LINKS_ROUTINES"); ok {
+	if numForwardLinksRoutines, ok := os.LookupEnv("NUM_FORWARD_LINKS_ROUTINES"); ok {
 		config.numForwardLinksRoutines, err = strconv.Atoi(numForwardLinksRoutines)
+	}
+	if numBackwardLinksRoutines, ok := os.LookupEnv("NUM_BACKWARD_LINKS_ROUTINES"); ok {
+		config.numBackwardLinksRoutines, err = strconv.Atoi(numBackwardLinksRoutines)
 	}
 	if exploreAllLinks, ok := os.LookupEnv("EXPLORE_ALL_LINKS"); ok {
 		config.exploreAllLinks, err = strconv.ParseBool(exploreAllLinks)
+	}
+	// TODO: ADD TO README
+	if exploreOnlyArticles, ok := os.LookupEnv("EXPLORE_ONLY_ARTICLES"); ok {
+		config.exploreAllLinks, err = strconv.ParseBool(exploreOnlyArticles)
 	}
 	if err != nil {
 		log.Panic(err)
@@ -82,31 +88,6 @@ func (r *defaultRacer) loopUntilResponse(u *url.URL) (*http.Response, error) {
 	return resp, nil
 }
 
-// checkLinksIteratePages is a function which iterates through a `page` json
-// blob for checkLinks. It is compliant with the jsonparser.ArrayEach API.
-// func (r *defaultRacer) checkLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
-// 	linksData, dataType, _, err := jsonparser.Get(page, "links")
-// 	if err != nil && dataType != jsonparser.NotExist {
-// 		r.handleErrInWorker(errors.WithStack(err))
-// 		return
-// 	}
-// 	if len(linksData) > 0 { // found it!
-// 		// figure out the page that got us there
-// 		prevName, err := jsonparser.GetString(page, "title")
-// 		if err != nil {
-// 			r.handleErrInWorker(errors.WithStack(err))
-// 			return
-// 		}
-// 		log.Debugf("found %s via %s", string(linksData), prevName)
-//
-// 		r.pathFromStartMap.put(r.endTitle, prevName)
-// 		r.closeOnce.Do(func() {
-// 			close(r.done)
-// 		}) // kill all goroutines
-// 		return
-// 	}
-// }
-
 // forwardLinksIteratePages is a function which iterates through a `page` json
 // blob for forwardLinks. It is compliant with the jsonparser.ArrayEach API.
 func (r *defaultRacer) forwardLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
@@ -115,15 +96,24 @@ func (r *defaultRacer) forwardLinksIteratePages(page []byte, dataType jsonparser
 		r.handleErrInWorker(errors.WithStack(err))
 		return
 	}
+	// the error here would just imply a missing key, it can be ignored
+	missing, _ := jsonparser.GetBoolean(page, "missing")
+	if missing {
+		r.handleErrInWorker(errors.New(fmt.Sprintf("the page %s does not exist", parentPageTitle)))
+		return
+	}
 	_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
 		childPageTitle, err := jsonparser.GetString(link, "title")
 		if err != nil {
 			r.handleErrInWorker(errors.WithStack(err))
 			return
 		}
-		if _, foundAnswer := r.pathFromEndMap.get(childPageTitle); foundAnswer {
-			// TODO: found answer
-			r.meetingPoint = childPageTitle
+		if _, ok := r.pathFromEndMap.get(childPageTitle); ok {
+			log.Debugf("found answer in forwardLinks worker! intersection at %s", childPageTitle)
+			r.pathFromStartMap.put(childPageTitle, parentPageTitle)
+
+			r.meetingPoint.set(childPageTitle)
+
 			r.closeOnce.Do(func() {
 				close(r.done)
 			}) // kill all goroutines
@@ -144,11 +134,18 @@ func (r *defaultRacer) forwardLinksIteratePages(page []byte, dataType jsonparser
 	}
 }
 
-// TODO: document this and all others
+// backwardLinksIteratePages is a function which iterates through a `page` json
+// blob for backwardLinks. It is compliant with the jsonparser.ArrayEach API.
 func (r *defaultRacer) backwardLinksIteratePages(page []byte, dataType jsonparser.ValueType, offset int, err error) {
 	parentPageTitle, err := jsonparser.GetString(page, "title")
 	if err != nil {
 		r.handleErrInWorker(errors.WithStack(err))
+		return
+	}
+	// the error here would just imply a missing key, it can be ignored
+	missing, _ := jsonparser.GetBoolean(page, "missing")
+	if missing {
+		r.handleErrInWorker(errors.New(fmt.Sprintf("the page %s does not exist", parentPageTitle)))
 		return
 	}
 	_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {
@@ -157,9 +154,12 @@ func (r *defaultRacer) backwardLinksIteratePages(page []byte, dataType jsonparse
 			r.handleErrInWorker(errors.WithStack(err))
 			return
 		}
-		if _, foundAnswer := r.pathFromStartMap.get(childPageTitle); foundAnswer {
-			// TODO: found answer
-			r.meetingPoint = childPageTitle
+		if _, ok := r.pathFromStartMap.get(childPageTitle); ok {
+			log.Debugf("found answer in backwardsLinks worker! intersection at %s", childPageTitle)
+
+			r.meetingPoint.set(childPageTitle)
+
+			r.pathFromEndMap.put(childPageTitle, parentPageTitle)
 			r.closeOnce.Do(func() {
 				close(r.done)
 			}) // kill all goroutines
@@ -170,77 +170,15 @@ func (r *defaultRacer) backwardLinksIteratePages(page []byte, dataType jsonparse
 			r.pathFromEndMap.put(childPageTitle, parentPageTitle)
 			r.backwardLinks <- childPageTitle
 		}
-	}, "links")
+	}, "linkshere")
 	if err != nil {
-		_, dataType, _, _ := jsonparser.Get(page, "links")
+		_, dataType, _, _ := jsonparser.Get(page, "linkshere")
 		if dataType != jsonparser.NotExist {
 			r.handleErrInWorker(errors.WithStack(err))
 			return
 		}
 	}
 }
-
-// checkLinksWorker gets links from linksToCheck and checks if any of them are
-// adjacent to end. If one is, the worker alerts all other workers.
-// func (r *defaultRacer) checkLinksWorker() {
-// 	for {
-// 		linksToCheck := make([]string, 0)
-//
-// 	linksToCheckLoop:
-// 		for len(linksToCheck) < 50 {
-// 			select {
-// 			case _ = <-r.done:
-// 				return
-// 			case link := <-r.checkLinks:
-// 				linksToCheck = append(linksToCheck, link)
-// 			default: // nothing to read on channel
-// 				if len(linksToCheck) > 0 { // if we have at least 1, let's boogie
-// 					break linksToCheckLoop
-// 				}
-// 			}
-// 		}
-// 		u, err := url.Parse("https://en.wikipedia.org/w/api.php")
-// 		if err != nil {
-// 			r.handleErrInWorker(errors.WithStack(err))
-// 			return
-// 		}
-// 		q := u.Query()
-// 		q.Set("action", "query")
-// 		q.Set("format", "json")
-// 		q.Set("prop", "links")
-// 		q.Set("titles", strings.Join(linksToCheck, "|"))
-// 		q.Set("redirects", "1")
-// 		q.Set("formatversion", "2")
-// 		q.Set("pllimit", "500")
-// 		q.Set("pltitles", r.endTitle)
-// 		u.RawQuery = q.Encode()
-//
-// 		resp, err := r.loopUntilResponse(u)
-// 		if err != nil {
-// 			r.handleErrInWorker(err)
-// 			return
-// 		}
-// 		bodyBytes, err := ioutil.ReadAll(resp.Body)
-// 		if err != nil {
-// 			r.handleErrInWorker(errors.WithStack(err))
-// 			return
-// 		}
-//
-// 		_, err = jsonparser.ArrayEach(bodyBytes, r.checkLinksIteratePages, "query", "pages")
-// 		if err != nil {
-// 			r.handleErrInWorker(errors.Wrap(err, string(bodyBytes)))
-// 			return
-// 		}
-//
-// 		for _, link := range linksToCheck {
-// 			// if this link hasn't been explored yet, let's explore it.
-// 			if _, ok := r.linksExplored.get(link); !ok {
-// 				r.linksExplored.put(link, "")
-// 				r.forwardLinks <- link
-// 			}
-// 		}
-// 	}
-// }
 
 // forwardLinksWorker gets pages from forwardLinks and adds the pages linked from these
 // pages to checkLinks.
@@ -267,15 +205,17 @@ func (r *defaultRacer) forwardLinksWorker() {
 			q.Set("format", "json")
 			q.Set("prop", "links")
 			q.Set("titles", linkToGet)
-			q.Set("redirects", "1")
+			// q.Set("redirects", "1") // TODO
 			q.Set("formatversion", "2")
 			q.Set("pllimit", "500")
 			if rand.Intn(2) == 1 { // let's mix things up a little
 				q.Set("pldir", "descending")
 			}
+			if config.exploreOnlyArticles {
+				q.Set("plnamespace", "0")
+			}
 
 			for moreResults {
-
 				if len(continueResult) > 0 {
 					q.Set("continue", continueResult)
 					q.Set("plcontinue", plcontinueResult)
@@ -323,6 +263,8 @@ func (r *defaultRacer) forwardLinksWorker() {
 	}
 }
 
+// backwardLinksWorker gets pages from backwardLinks and adds the pages linked from these
+// pages to checkLinks.
 func (r *defaultRacer) backwardLinksWorker() {
 	for {
 		select {
@@ -347,15 +289,18 @@ func (r *defaultRacer) backwardLinksWorker() {
 			q.Set("prop", "linkshere")
 			q.Set("lhprop", "title")   // TODO: MAYBE DO THIS FOR FORWARD
 			q.Set("titles", linkToGet) // TODO: try multiple titles here?
-			q.Set("redirects", "1")
+			// q.Set("redirects", "1")
 			q.Set("formatversion", "2")
 			q.Set("lhlimit", "500")
+			if config.exploreOnlyArticles {
+				q.Set("lhnamespace", "0")
+			}
 
 			for moreResults {
 
 				if len(continueResult) > 0 {
 					q.Set("continue", continueResult)
-					q.Set("plcontinue", lhcontinueResult)
+					q.Set("lhcontinue", lhcontinueResult)
 				}
 				u.RawQuery = q.Encode()
 

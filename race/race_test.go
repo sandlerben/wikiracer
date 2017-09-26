@@ -1,9 +1,10 @@
 package race
 
 import (
+	"math/rand"
 	"net/http"
 	"net/url"
-	"strings"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,9 +12,17 @@ import (
 )
 
 var (
-	checkLinksResponse = `{"batchcomplete":true,"query":{"pages":[{"pageid":8569916,"ns":0,"title":"English language","links":[{"ns":0,"title":"end"}]}]}}`
-	getLinksResponse   = `{"query":{"pages":[{"pageid":8569916,"ns":0,"title":"start","links":[{"ns":14,"title":"English language"},{"ns":14,"title":"Spanish language"},{"ns":14,"title":"French language"},{"ns":14,"title":"German language"}]}}`
+	forwardLinksResponse  = `{"query":{"pages":[{"pageid":8569916,"ns":0,"title":"start","links":[{"ns":14,"title":"English language"},{"ns":14,"title":"Spanish language"},{"ns":14,"title":"French language"},{"ns":14,"title":"German language"}]}]}`
+	backwardLinksResponse = `{"query":{"pages":[{"pageid":8569916,"ns":0,"title":"end","linkshere":[{"ns":14,"title":"English language"},{"ns":14,"title":"Spanish language"},{"ns":14,"title":"French language"},{"ns":14,"title":"German language"}]}]}`
+
+	forwardLinksResponseWithContinue  = `{"continue": {"plcontinue": "39027|0|Shawn_Michaels","continue": "||"},"query":{"pages":[{"pageid":8569916,"ns":0,"title":"start","links":[{"ns":14,"title":"Hebrew language"}]}]}`
+	backwardLinksResponseWithContinue = `{"continue": {"plcontinue": "39027|0|Shawn_Michaels","continue": "||"},"query":{"pages":[{"pageid":8569916,"ns":0,"title":"end","linkshere":[{"ns":14,"title":"Hebrew language"}]}]}`
 )
+
+func init() {
+	// mock the randomness of workers.go
+	rand.Seed(0)
+}
 
 func TestLoopUntilResponse(t *testing.T) {
 	httpmock.Activate()
@@ -44,140 +53,139 @@ func TestLoopUntilResponse(t *testing.T) {
 	}
 }
 
-func getCheckLinksURL(samplePages []string) string {
-	u, _ := url.Parse("https://en.wikipedia.org/w/api.php")
-	q := u.Query()
-	q.Set("action", "query")
-	q.Set("format", "json")
-	q.Set("prop", "links")
-	q.Set("titles", strings.Join(samplePages, "|"))
-	q.Set("redirects", "1")
-	q.Set("formatversion", "2")
-	q.Set("pllimit", "500")
-	q.Set("pltitles", "end")
-	u.RawQuery = q.Encode()
-	return u.String()
-}
+func TestGetPath(t *testing.T) {
+	pathMap := concurrentMap{m: make(map[string]string)}
+	pathMap.put("start", "")
+	pathMap.put("a", "start")
+	pathMap.put("b", "a")
+	pathMap.put("c", "b")
+	pathMap.put("d", "c")
 
-func TestCheckLinksWorker(t *testing.T) {
-	httpmock.Activate()
-	defer httpmock.DeactivateAndReset()
-
-	samplePages := []string{"one", "two", "three", "four"}
-	u := getCheckLinksURL(samplePages)
-	httpmock.RegisterResponder("GET", u,
-		httpmock.NewStringResponder(200, checkLinksResponse))
-
-	r := newDefaultRacer("start", "end", 1*time.Minute)
-
-	for _, page := range samplePages {
-		r.checkLinks <- page
-	}
-
-	go r.checkLinksWorker()
-	_ = <-r.done // we will only go past this line if checkLinksWorker closes done
-
-	for _, page := range samplePages {
-		if _, ok := r.linksExplored.get(page); !ok {
-			t.Errorf("link %s should be in linksExplored but it is not", page)
-		}
+	ret := getPath("d", &pathMap)
+	expected := []string{"d", "c", "b", "a", "start"}
+	if !reflect.DeepEqual(ret, expected) {
+		t.Errorf("getPath returned %v instead of %v", ret, expected)
 	}
 }
 
-func TestCheckLinksWorkerHandleErr(t *testing.T) {
-	httpmock.Activate()
-	defer httpmock.DeactivateAndReset()
-
-	samplePages := []string{"one", "two", "three", "four"}
-	u := getCheckLinksURL(samplePages)
-	httpmock.RegisterResponder("GET", u,
-		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
-
-	r := newDefaultRacer("start", "end", 1*time.Minute)
-
-	for _, page := range samplePages {
-		r.checkLinks <- page
-	}
-
-	go r.checkLinksWorker()
-	_ = <-r.done // we will only go past this line if checkLinksWorker closes done
-
-	for _, page := range samplePages {
-		if _, ok := r.linksExplored.get(page); ok {
-			t.Errorf("link %s should not be in linksExplored but it is", page)
-		}
-	}
-
-	if r.err == nil {
-		t.Errorf("an error should have been caught")
-	}
-
-	_ = <-r.done // done must be closed. if done wasn't closed, this will hang.
-}
-
-func getGetLinksURL(linkToGet string) *url.URL {
+func getForwardLinksURL(linkToGet string) *url.URL {
 	u, _ := url.Parse("https://en.wikipedia.org/w/api.php")
 	q := u.Query()
 	q.Set("action", "query")
 	q.Set("format", "json")
 	q.Set("prop", "links")
 	q.Set("titles", linkToGet)
-	q.Set("redirects", "1")
 	q.Set("formatversion", "2")
 	q.Set("pllimit", "500")
 	q.Set("pldir", "descending")
+	q.Set("plnamespace", "0")
 	return u
 }
 
-func TestGetLinksWorker(t *testing.T) {
+func TestForwardLinksWorker(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	linkToGet := "one"
-	u := getGetLinksURL(linkToGet)
+	u := getForwardLinksURL(linkToGet)
 	httpmock.RegisterResponder("GET", u.String(),
-		httpmock.NewStringResponder(200, getLinksResponse))
-	u.Query().Del("pldir")
-	httpmock.RegisterResponder("GET", u.String(),
-		httpmock.NewStringResponder(200, getLinksResponse))
+		httpmock.NewStringResponder(200, forwardLinksResponse))
 
-	r := newDefaultRacer("start", "end", 1*time.Minute)
+	r := newDefaultRacer("start", "German language", 1*time.Minute)
+	r.pathFromEndMap.put("German language", "")
 
-	r.getLinks <- linkToGet
-
-	r.getLinksWorker()
+	r.forwardLinks <- linkToGet
+	go r.forwardLinksWorker()
+	_ = <-r.done // we will only go past this line if forwardLinksWorker closes done
 
 	samplePages := []string{"English language", "French language", "Spanish language", "German language"}
 	for _, page := range samplePages {
-		if _, ok := r.prevMap.get(page); !ok {
-			t.Errorf("link %s should be in prevMap but it is not", page)
+		if _, ok := r.pathFromStartMap.get(page); !ok {
+			t.Errorf("link %s should be in pathFromStartMap but it is not", page)
 		}
 	}
 }
 
-func TestGetLinksWorkerHandleErr(t *testing.T) {
+func TestForwardLinksWorkerHandleErr(t *testing.T) {
 	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	linkToGet := "one"
-	u := getGetLinksURL(linkToGet)
-	httpmock.RegisterResponder("GET", u.String(),
-		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
-	u.Query().Del("pldir")
+	u := getForwardLinksURL(linkToGet)
 	httpmock.RegisterResponder("GET", u.String(),
 		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
 
 	r := newDefaultRacer("start", "end", 1*time.Minute)
 
-	r.getLinks <- linkToGet
-
-	go r.getLinksWorker()
-	_ = <-r.done // we will only go past this line if getLinksWorker closes done
+	r.forwardLinks <- linkToGet
+	go r.forwardLinksWorker()
+	_ = <-r.done // we will only go past this line if forwardLinksWorker closes done
 
 	samplePages := []string{"English language", "French language", "Spanish language", "German language"}
 	for _, page := range samplePages {
-		if _, ok := r.prevMap.get(page); ok {
-			t.Errorf("link %s should not be in prevMap but it is", page)
+		if _, ok := r.pathFromStartMap.get(page); ok {
+			t.Errorf("link %s should not be in pathFromStartMap but it is", page)
+		}
+	}
+}
+
+func getBackwardLinksURL(linkToGet string) *url.URL {
+	u, _ := url.Parse("https://en.wikipedia.org/w/api.php")
+	q := u.Query()
+	q.Set("action", "query")
+	q.Set("format", "json")
+	q.Set("prop", "linkshere")
+	q.Set("lhprop", "title")
+	q.Set("titles", linkToGet)
+	q.Set("formatversion", "2")
+	q.Set("lhlimit", "500")
+	q.Set("lhnamespace", "0")
+	return u
+}
+
+func TestBackwardLinksWorker(t *testing.T) {
+	httpmock.Activate()
+	defer httpmock.DeactivateAndReset()
+
+	linkToGet := "one"
+	u := getBackwardLinksURL(linkToGet)
+	httpmock.RegisterResponder("GET", u.String(),
+		httpmock.NewStringResponder(200, backwardLinksResponse))
+
+	r := newDefaultRacer("German language", "end", 1*time.Minute)
+	r.pathFromStartMap.put("German language", "")
+
+	r.backwardLinks <- linkToGet
+	go r.backwardLinksWorker()
+	_ = <-r.done // we will only go past this line if backwardLinksWorker closes done
+
+	samplePages := []string{"English language", "French language", "Spanish language", "German language"}
+	for _, page := range samplePages {
+		if _, ok := r.pathFromEndMap.get(page); !ok {
+			t.Errorf("link %s should be in pathFromStartMap but it is not", page)
+		}
+	}
+}
+
+func TestBackwardLinksWorkerHandleErr(t *testing.T) {
+	httpmock.Activate()
+	defer httpmock.DeactivateAndReset()
+
+	linkToGet := "one"
+	u := getBackwardLinksURL(linkToGet)
+	httpmock.RegisterResponder("GET", u.String(),
+		httpmock.NewStringResponder(200, `{"batchcomplete":true}`))
+
+	r := newDefaultRacer("start", "end", 1*time.Minute)
+
+	r.backwardLinks <- linkToGet
+	go r.backwardLinksWorker()
+	_ = <-r.done // we will only go past this line if backwardLinksWorker closes done
+
+	samplePages := []string{"English language", "French language", "Spanish language", "German language"}
+	for _, page := range samplePages {
+		if _, ok := r.pathFromEndMap.get(page); ok {
+			t.Errorf("link %s should not be in pathFromStartMap but it is", page)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"reflect"
 	"testing"
 	"time"
 
@@ -49,6 +50,21 @@ func TestLoopUntilResponse(t *testing.T) {
 		if resp.StatusCode != 200 {
 			t.Error("http code must be 200")
 		}
+	}
+}
+
+func TestGetPath(t *testing.T) {
+	pathMap := concurrentMap{m: make(map[string]string)}
+	pathMap.put("start", "")
+	pathMap.put("a", "start")
+	pathMap.put("b", "a")
+	pathMap.put("c", "b")
+	pathMap.put("d", "c")
+
+	ret := getPath("d", &pathMap)
+	expected := []string{"d", "c", "b", "a", "start"}
+	if !reflect.DeepEqual(ret, expected) {
+		t.Errorf("getPath returned %v instead of %v", ret, expected)
 	}
 }
 

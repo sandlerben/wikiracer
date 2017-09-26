@@ -2,6 +2,7 @@ package race
 
 import "sync"
 
+// lockerString is a thread-safe string wrapper
 type lockerString struct {
 	sync.Mutex
 	s string
@@ -14,6 +15,7 @@ func (l *lockerString) set(k string) {
 	l.Unlock()
 }
 
+// concurrentMap is a thread-safe map[string]string
 type concurrentMap struct {
 	sync.RWMutex
 	m map[string]string

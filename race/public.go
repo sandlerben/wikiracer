@@ -9,6 +9,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+var (
+	forwardLinksChannelSize  = 10000000
+	backwardLinksChannelSize = 10000000
+)
+
 // A Racer performs a wikipedia race.
 type Racer interface {
 	Run() ([]string, error)
@@ -89,13 +94,15 @@ func (r *defaultRacer) Run() ([]string, error) {
 		return nil, nil
 	}
 
+	// get the path from start, reverse it, and remove the last element
+	// (which is the meeting point) since it will reappear in path from end
 	pathFromStart := getPath(r.meetingPoint.s, &r.pathFromStartMap)
 	reverse(pathFromStart)
 	pathFromStart = pathFromStart[0 : len(pathFromStart)-1]
 
 	pathFromEnd := getPath(r.meetingPoint.s, &r.pathFromEndMap)
-
 	finalPath := append(pathFromStart, pathFromEnd...)
+
 	r.meetingPoint.Unlock()
 	return finalPath, nil
 }

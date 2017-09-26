@@ -16,14 +16,10 @@ import (
 
 type workerType int
 
+// effectively enums for the workerType type
 const (
 	forwardType workerType = iota
 	backwardType
-)
-
-var (
-	forwardLinksChannelSize  = 10000000
-	backwardLinksChannelSize = 10000000
 )
 
 type configuration struct {
@@ -155,6 +151,7 @@ func (r *defaultRacer) higherOrderIteratePages(wType workerType) func([]byte, js
 			}
 		}, linksJSONKey)
 		if err != nil {
+			// handle the err unless it's just a missing key
 			_, dataType, _, _ := jsonparser.Get(page, linksJSONKey)
 			if dataType != jsonparser.NotExist {
 				r.handleErrInWorker(errors.WithStack(err))
@@ -189,7 +186,6 @@ func (r *defaultRacer) forwardLinksWorker() {
 			q.Set("format", "json")
 			q.Set("prop", "links")
 			q.Set("titles", linkToGet)
-			// q.Set("redirects", "1") // TODO
 			q.Set("formatversion", "2")
 			q.Set("pllimit", "500")
 			if rand.Intn(2) == 1 { // let's mix things up a little
@@ -216,9 +212,9 @@ func (r *defaultRacer) forwardLinksWorker() {
 					r.handleErrInWorker(errors.WithStack(err))
 					return
 				}
-				// log.Debug(string(bodyBytes))
 
-				_, err = jsonparser.ArrayEach(bodyBytes, r.higherOrderIteratePages(forwardType), "query", "pages")
+				_, err = jsonparser.ArrayEach(bodyBytes,
+					r.higherOrderIteratePages(forwardType), "query", "pages")
 				if err != nil {
 					r.handleErrInWorker(errors.Wrap(err, string(bodyBytes)))
 					return
@@ -299,7 +295,8 @@ func (r *defaultRacer) backwardLinksWorker() {
 					return
 				}
 
-				_, err = jsonparser.ArrayEach(bodyBytes, r.higherOrderIteratePages(backwardType), "query", "pages")
+				_, err = jsonparser.ArrayEach(bodyBytes,
+					r.higherOrderIteratePages(backwardType), "query", "pages")
 				if err != nil {
 					r.handleErrInWorker(errors.Wrap(err, string(bodyBytes)))
 					return

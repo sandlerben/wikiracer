@@ -125,7 +125,10 @@ func (r *defaultRacer) higherOrderIteratePages(wType workerType) func([]byte, js
 		// the error here would just imply a missing key, it can be ignored
 		missing, _ := jsonparser.GetBoolean(page, "missing")
 		if missing {
-			r.handleErrInWorker(errors.Errorf("the page %s does not exist", parentPageTitle))
+			// this error should only end the race is it's caused by the user
+			if parentPageTitle == r.startTitle || parentPageTitle == r.endTitle {
+				r.handleErrInWorker(errors.Errorf("the page %s does not exist", parentPageTitle))
+			}
 			return
 		}
 		_, err = jsonparser.ArrayEach(page, func(link []byte, dataType jsonparser.ValueType, offset int, err error) {

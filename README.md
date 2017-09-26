@@ -3,7 +3,7 @@ wikiracer
 
 wikiracer is a Go application which plays ["The Wikipedia Game"](https://en.wikipedia.org/wiki/Wikiracing). It takes a start page and an end page and follows hyperlinks to get from the start page to the end page as quickly as possible.
 
-_Note: The original version of wikiracer can be found on [branch v1](https://github.com/sandlerben/wikiracer/tree/v1)._
+_Note: The original version of wikiracer can be found on the [v1 branch](https://github.com/sandlerben/wikiracer/tree/v1)._
 
 Table of Contents
 =================
@@ -144,7 +144,7 @@ A `race.Racer` encapsulates all the state needed for one race, including:
 - A record of how pages found traversing backwards from the end page were reached during the race
 - Synchronization primitives (`sync.Once`)
 - Channels to allow concurrent workers to communicate  
-- A `meetingPoint` (which can be used to compute a full path as will be described below)
+- A "meeting point"(which can be used to compute a full path (as will be described below)
 - Any errors that occurred during the race
 
 A `race.Racer` exposes one public function, `Run`, which returns a path from a start page to an end page.
@@ -154,22 +154,21 @@ Under the hood, there is a lot going on inside the `race` package. Specifically,
 At a high level, the Wikipedia graph is explored in the following manner:
 
 1. The start page is added to the `forwardLinks` channel and the end page is added to the `backwardLinks` channel.
-2. `forwardLinks` workers traverse the Wikipedia graph _forward_ from the start page. At each iteration, they read a page from the `forwardLinks` channel and call the MediaWiki API to add all pages linked _from_ that page to the channel. In other words, they traverse the start page's [connected component](http://mathworld.wolfram.com/WeaklyConnectedComponent.html) (technically, weakly connected component since the graph is directed).
-3. `backwardLinks` workers traverse the Wikipedia graph _backward_ from the end page. At each iteration, they read a page from the `backwardLinks` channel and call the MediaWiki API to add all pages which link _to_ that page to the channel. In other words, they traverse the end page's connected component.
+2. `forwardLinks` workers traverse the Wikipedia graph _forward_ from the start page. At each iteration, they read a page from the `forwardLinks` channel and call the MediaWiki API to add all pages linked _from_ that page to the channel. In other words, they expand the start page's [connected component](http://mathworld.wolfram.com/WeaklyConnectedComponent.html) (technically, weakly connected component).
+3. `backwardLinks` workers traverse the Wikipedia graph _backward_ from the end page. At each iteration, they read a page from the `backwardLinks` channel and call the MediaWiki API to add all pages which link _to_ that page to the channel. In other words, they expand the end page's connected component.
 
 These stages are described in more detail below.
 
 ### Concurrent graph traversal
 
-Clearly, the `forwardLinks` and `backwardLinks` workers are quite similar (and much of the code is shared between them). `forwardLinks` workers explore the start page's connected component and `backwardLinks` explore the end page's connected component. The main differences between the workers are the requests each make to the MediaWiki API. For `forwardLinks` the `links` property is queried; for `backwardLinks` the `linkshere` property is queried.
+Clearly, the `forwardLinks` and `backwardLinks` workers are extremely similar (and much of the code is shared between them). `forwardLinks` workers explore the start page's connected component and `backwardLinks` explore the end page's connected component. In order to accomplish this, `forwardLinks` workers query the `links` property of pages and `backwardLinks` workers query the `linkshere` property of pages.
 
-These workers execute as follows:
+These workers "work" as follows:
 
-1. Iterate until the `done` channel is closed (this is a signal that all workers should exit).
-2. At each iteration, take a page from the worker's channel. Query for the page's `links` or `linkshere` (which are essentially the page's "neighbors").
-3. Check if any of these "neighbors" crosses [the cut](https://en.wikipedia.org/wiki/Cut_(graph_theory)) between the start page's connected component and the end page's connected component. If they do, save this `meetingPoint` and close the `done` channel to signal that an answer was found.
-4. If not, map these neighbors to the original page in the relevant mapping (`pathFromStartMap` for `forwardLinks` and `pathFromEndMap` for `backwardLinks`). These maps are used to recreate a path from start to end when a `meetingPoint` is found.
-5. Eventually, after some time limit (1 minute by default) if no path is found, all workers give up.
+1. At each iteration, a worker takes a page from either the `forwardLinks` or `backwardLinks` channel. It then queries for the page's `links` or `linkshere` property to get "neighboring" pages.
+2. Next, it checks if any of these "neighbors" crosses [the cut](https://en.wikipedia.org/wiki/Cut_(graph_theory)) between the start page's connected component and the end page's connected component. If any do, the worker sets the `meetingPoint` variable to that page and closes the `done` channel to signal that an answer was found.
+3. If a meeting point was not found, make a record of how we got to each neighbor. In other words, add mappings from neighbor to the parent page to `pathFromStartMap` or `pathFromEndMap`.
+4. When a `meetingPoint` is found, use `pathFromStartMap` to recreate the path from `start` to `meetingPoint` and use `pathFromEndMap` to recreate the path from `meetingPoint` to `end`.
 
 ### More details
 
@@ -183,10 +182,10 @@ The original version of wikiracer worked quite differently and it is fully descr
 
 At a high level, the old implementation worked as follows. Pages passed through a two-stage pipeline:
 
-- A page was added to the checkLinks channel. A checkLinks worker checked if the page connected to the end page using the `pltitles` parameter of the MediaWiki API. If it did, wikiracer returned. If it did not, the page was added to the getLinks channel.
-- A getLinks worker took the page and added all the "neighbor" pages linked from the page to the checkLinks channel.
+1. A page was added to the checkLinks channel. A checkLinks worker checked if the page connected to the end page using the `pltitles` parameter of the MediaWiki API. If it did, wikiracer returned. If it did not, the page was added to the getLinks channel.
+2. A getLinks worker took the page and added all the "neighbor" pages linked from the page to the checkLinks channel.
 
-While this approach worked for most cases, it performed poorly when few pages linked to the end page. For example, with an end page like "Segment", which is a disambiguation page linked to by maybe about a dozen other pages, wikiracer would not find an answer.
+While this approach worked for most cases, it performed poorly when few pages linked to the end page. For example, with an end page like "Segment", which is a disambiguation page linked to by only about a dozen other pages, wikiracer would not find an answer.
 
 In contrast, the new approach which also traverses backwards from the end page can "escape" end pages with low in-degree. The new approach finds pages that are much more likely to be found while traversing from the start page.
 

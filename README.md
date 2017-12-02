@@ -3,8 +3,6 @@ wikiracer
 
 wikiracer is a Go application which plays ["The Wikipedia Game"](https://en.wikipedia.org/wiki/Wikiracing). It takes a start page and an end page and follows hyperlinks to get from the start page to the end page as quickly as possible.
 
-_Note: The original version of wikiracer can be found on the [v1 branch](https://github.com/sandlerben/wikiracer/tree/v1)._
-
 Table of Contents
 =================
 

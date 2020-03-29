@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	logMiddleware "github.com/bakins/logrus-middleware"
 	"github.com/gorilla/mux"
 	"github.com/sandlerben/wikiracer/race"

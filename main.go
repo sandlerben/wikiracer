@@ -7,7 +7,7 @@ import (
 	_ "net/http/pprof" // import for side effects
 	"os"
 
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/sandlerben/wikiracer/web"
 )
 
